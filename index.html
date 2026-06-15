@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+  />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#7ec0ee" />
+  <title>Blockcraft — Mobile</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three.module.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <!-- Loading / start screen -->
+  <div id="overlay">
+    <div class="panel">
+      <h1>BLOCKCRAFT</h1>
+      <p class="subtitle">A mobile voxel sandbox</p>
+      <div id="loading">Generating world…</div>
+      <button id="playBtn" disabled>TAP TO PLAY</button>
+      <div class="hint">
+        <p><b>Left pad</b> — move &nbsp;•&nbsp; <b>Drag right</b> — look</p>
+        <p><b>Tap world</b> — break &nbsp;•&nbsp; <b>Place</b> button — build</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- HUD -->
+  <div id="hud" class="hidden">
+    <div id="crosshair">+</div>
+
+    <!-- Movement joystick -->
+    <div id="joystick">
+      <div id="joystickKnob"></div>
+    </div>
+
+    <!-- Action buttons -->
+    <div id="actions">
+      <button id="jumpBtn" class="actionBtn">JUMP</button>
+      <button id="placeBtn" class="actionBtn">PLACE</button>
+      <button id="flyBtn" class="actionBtn small">FLY</button>
+    </div>
+
+    <!-- Hotbar -->
+    <div id="hotbar"></div>
+
+    <!-- top-left info -->
+    <div id="info"></div>
+  </div>
+
+  <canvas id="game"></canvas>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
