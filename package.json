@@ -1,0 +1,16 @@
+{
+  "name": "blockcraft-mobile",
+  "version": "1.0.0",
+  "description": "A mobile-friendly Minecraft-style voxel sandbox built with Three.js",
+  "type": "module",
+  "scripts": {
+    "start": "python3 -m http.server 8080",
+    "serve": "npx --yes http-server -p 8080 -c-1 .",
+    "test": "node logic.test.mjs"
+  },
+  "keywords": ["minecraft", "voxel", "threejs", "mobile", "game"],
+  "license": "MIT",
+  "devDependencies": {
+    "three": "0.160.0"
+  }
+}
