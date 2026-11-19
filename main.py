@@ -362,14 +362,16 @@ def render_dashboard(engine):
                  f"<small>{s['cents_per_contract']:+.2f}¢{se}</small></td></tr>")
     recent = db.q("SELECT ts,strategy,ticker,side,price,result,pnl,reason FROM trades ORDER BY id DESC LIMIT 25")
     trs = ""
+    closes = dict(db.q("SELECT ticker, MAX(close_ts) FROM trades GROUP BY ticker"))
     for ts, strat, tk, side, price, res, pnl, reason in recent:
-        t = datetime.fromtimestamp(ts).strftime("%m/%d %H:%M")
+        t = datetime.fromtimestamp(ts, live_mod.LOCAL_TZ).strftime("%-I:%M %p")
         p = fmt_money(pnl) if pnl is not None else "open"
-        trs += (f"<tr><td>{t}<br><small>{html.escape(tk[-7:])}</small></td><td>{strat}</td>"
+        trs += (f"<tr><td>{t}<br><small>ends {datetime.fromtimestamp(closes.get(tk) or ts, live_mod.LOCAL_TZ).strftime('%-I:%M %p')}</small></td><td>{strat}</td>"
                 f"<td>{side.upper()} @{price:.2f}<br><small>{html.escape(reason or '')}</small></td>"
                 f"<td>{res or ''} {p}</td></tr>")
     if st:
-        live = (f"<b>{st['ticker']}</b> · {st['min_left']:.1f} min left<br>"
+        live = (f"<b>Window ending {datetime.fromtimestamp(st['close_ts'], live_mod.LOCAL_TZ).strftime('%-I:%M %p')}</b>"
+                f" · {st['min_left']:.1f} min left<br>"
                 f"BTC ${st['spot']:,.2f} vs target {('$%s' % format(st['strike'], ',.2f')) if st['strike'] else '?'}<br>"
                 f"YES ask {st['ask']['yes'] or '–'} · NO ask {st['ask']['no'] or '–'}"
                 + (f" · model YES {st['p_yes']:.2f}" if st['p_yes'] is not None else " · model warming up"))
@@ -406,7 +408,7 @@ body{{font-family:-apple-system,system-ui,sans-serif;margin:12px;background:#0b0
 h1{{font-size:20px;margin:0 0 4px}} .card{{background:#151b23;border-radius:10px;padding:10px;margin:10px 0}}
 table{{width:100%;border-collapse:collapse;font-size:14px}} td,th{{padding:6px 4px;border-bottom:1px solid #222;text-align:left;vertical-align:top}}
 small{{color:#8b949e}} .err{{color:#f87171}}</style></head><body>
-<h1>BTC 15-min Bot</h1><small>Strategy table = paper results ({CONTRACTS} contracts/trade, fees included) · updated {age}</small>
+<h1>BTC 15-min Bot</h1><small>All times Pacific · Strategy table = paper results ({CONTRACTS} contracts/trade, fees included) · updated {age}</small>
 {f'<div class="card err">Error: {html.escape(err)}</div>' if err else ''}
 <div class=card>{live}</div>
 {live_html}
