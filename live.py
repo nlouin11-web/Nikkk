@@ -183,8 +183,14 @@ class LiveTrader:
         r = self.db.q("SELECT v FROM settings WHERE k='killed'")
         return bool(r and r[0][0] == "1")
 
-    def set_killed(self, on):
+    def set_killed(self, on, auto=False):
         self.db.q("INSERT OR REPLACE INTO settings VALUES('killed', ?)", ("1" if on else "0",))
+        self.db.q("INSERT OR REPLACE INTO settings VALUES('auto_killed', ?)", ("1" if (on and auto) else "0",))
+
+    @property
+    def auto_killed(self):
+        r = self.db.q("SELECT v FROM settings WHERE k='auto_killed'")
+        return bool(r and r[0][0] == "1")
 
     # ---- gates
     def strategy_proven(self):
@@ -325,8 +331,11 @@ class LiveTrader:
         bal = float(bal) if bal not in (None, "") else (r.get("balance") or 0) / 100
         self.last_balance = bal
         if bal < BALANCE_FLOOR and not self.killed:
-            self.set_killed(True)
+            self.set_killed(True, auto=True)
             self.last_error = f"AUTO-STOP: balance ${bal:.2f} fell below ${BALANCE_FLOOR:.2f} floor"
+        elif bal >= BALANCE_FLOOR + 0.50 and self.killed and self.auto_killed:
+            self.set_killed(False)   # only auto-stops resume; a manual kill switch stays off
+            self.last_error = f"Resumed: balance back to ${bal:.2f}"
 
     def resync(self, get_market, series="KXBTC15M"):
         """Rebuild live state from Kalshi after a restart: open positions (so take-profit and settlement keep

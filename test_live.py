@@ -195,6 +195,12 @@ class T(unittest.TestCase):
         self.lt.check_balance(1061.0)
         self.assertTrue(self.lt.killed)
         self.assertFalse(self.lt.status()[0])
+        self.c.request = lambda m, ep, body=None: {"balance": 1500}
+        self.lt.check_balance(1130.0)               # auto-stop resumes when cash is back
+        self.assertFalse(self.lt.killed)
+        self.lt.set_killed(True)                    # manual kill
+        self.lt.check_balance(1200.0)
+        self.assertTrue(self.lt.killed)             # stays off
         L.LIVE_MODE = "auto"
 
     def test_slippage_and_unfilled_visible(self):
