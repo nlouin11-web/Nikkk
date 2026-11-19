@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import live as live_mod
+import backtest as bt_mod
 
 # ---------------------------------------------------------------- config
 KALSHI = os.environ.get("KALSHI_BASE", "https://api.elections.kalshi.com/trade-api/v2")
@@ -299,8 +300,18 @@ class Engine:
         except Exception as e:
             print("warm-up failed (will warm up live):", e, flush=True)
 
+    def start_backtest(self):
+        self.status["backtest"] = {"state": "starting"}
+        def go():
+            try:
+                bt_mod.run(self.db, http_json, KALSHI, fair_yes_prob, taker_fee, SERIES, self.status["backtest"])
+            except Exception as e:
+                self.status["backtest"].update(state=f"failed: {type(e).__name__}: {e}")
+        threading.Thread(target=go, daemon=True).start()
+
     def run(self):
         self.warm_up()
+        self.start_backtest()
         if self.live:
             try:
                 print(f"Resynced {self.live.resync(get_market)} live positions from Kalshi", flush=True)
@@ -400,6 +411,19 @@ def render_dashboard(engine):
                      + "<form method=post action=/test style='margin-top:10px'>"
                        "<input name=key_id placeholder='Paste Kalshi Key ID' style='padding:8px;width:60%'> "
                        "<button style='padding:8px 12px'>Test trade (1 contract)</button></form></div>")
+    bs = engine.status.get("backtest") or {}
+    b = bt_mod.stats(db)
+    if b.get("n"):
+        se = f" ±{2*b['se_cents']:.1f}" if b.get("se_cents") else ""
+        verdict = ("EDGE FOUND" if b["edge"] else
+                   ("No proven edge" if b["n"] >= 300 else f"Need 300 trades ({b['n']} so far)"))
+        bt_html = (f"<div class=card><b>Backtest</b> <small>(last {bt_mod.DAYS:g} days, live rules)</small><br>"
+                   f"{b['n']} trades · win {b['win_rate']*100:.1f}% · {fmt_money(b['pnl'])} per 1 contract each · "
+                   f"{b['cents']:+.2f}¢{se}/contract<br><b>{verdict}</b>"
+                   f"<br><small>{html.escape(str(bs.get('state','')))} {bs.get('done','')}/{bs.get('windows','')}</small></div>")
+    else:
+        bt_html = (f"<div class=card><b>Backtest</b> <small>{html.escape(str(bs.get('state','not started')))} "
+                   f"{bs.get('done','')}/{bs.get('windows','')}</small></div>")
     err = engine.status.get("error")
     age = f"{now - engine.status['last_ok']:.0f}s ago" if engine.status.get("last_ok") else "never"
     return f"""<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1">
@@ -412,6 +436,7 @@ small{{color:#8b949e}} .err{{color:#f87171}}</style></head><body>
 {f'<div class="card err">Error: {html.escape(err)}</div>' if err else ''}
 <div class=card>{live}</div>
 {live_html}
+{bt_html}
 <div class=card><table><tr><th>Strategy</th><th>Trades</th><th>Win%</th><th>P/L</th></tr>{rows}</table>
 <small>¢ = avg profit per contract after fees, ± = rough 95% range. A strategy only has an edge if it beats
 random_baseline and the whole range stays above 0 after {MIN_SETTLED_FOR_VERDICT}+ trades.</small></div>

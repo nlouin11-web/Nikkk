@@ -187,6 +187,12 @@ class LiveTrader:
 
     # ---- gates
     def strategy_proven(self):
+        import backtest
+        bt = backtest.stats(self.db)
+        if bt.get("edge"):
+            return True, f"backtest edge: {bt['cents']:+.2f}c/contract over {bt['n']} trades"
+        if bt.get("n", 0) >= 300:
+            return False, f"backtest: no proven edge ({bt['cents']:+.2f}c over {bt['n']} trades)"
         stats = {s["strategy"]: s for s in self.stats_fn(self.db)}
         s, base = stats.get(LIVE_STRATEGY), stats.get("random_baseline")
         if not s:
