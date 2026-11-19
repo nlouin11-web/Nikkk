@@ -29,6 +29,7 @@ DAILY_LOSS_CAP = float(os.environ.get("DAILY_LOSS_CAP", "5"))
 LIVE_MIN_EDGE = float(os.environ.get("LIVE_MIN_EDGE", "0.05"))   # model must beat price+fee by 5c
 LIVE_MIN_PRICE = float(os.environ.get("LIVE_MIN_PRICE", "0.15"))  # no lottery tickets
 LIVE_MAX_PRICE = float(os.environ.get("LIVE_MAX_PRICE", "0.85"))  # no 95c bets where one loss wipes 20 wins
+TAKE_PROFIT = float(os.environ.get("TAKE_PROFIT", "0.03"))  # sell once locked-in profit >= 3c/contract after all fees
 LIVE_MIN_MINUTES = float(os.environ.get("LIVE_MIN_MINUTES", "2"))  # skip the chaotic last 2 minutes
 KEY_ID = os.environ.get("KALSHI_KEY_ID", "").strip()
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "").strip()
@@ -112,6 +113,38 @@ class Kalshi:
         return {"order_id": r.get("order_id"), "status": "filled" if filled else "unfilled",
                 "fill_count": filled, "cost": round(per * filled, 4),
                 "fees": round(float(r.get("average_fee_paid") or 0) * filled, 4)}
+
+    def sell_ioc(self, ticker, side, price, count):
+        r = self.request("POST", "/portfolio/events/orders", _sell_body(ticker, side, price, count))
+        filled = float(r.get("fill_count") or 0)
+        yes_price = price if side == "yes" else 1 - price
+        avg_yes = float(r.get("average_fill_price") or yes_price) if filled else 0.0
+        per = avg_yes if side == "yes" else 1 - avg_yes
+        return {"fill_count": filled, "proceeds": round(per * filled, 4),
+                "fees": round(float(r.get("average_fee_paid") or 0) * filled, 4)}
+
+
+def _parse_any_ts(v):
+    if v in (None, ""):
+        return None
+    try:
+        f = float(v)
+        return f / 1000 if f > 1e11 else f
+    except (TypeError, ValueError):
+        try:
+            return datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return None
+
+
+def _sell_body(ticker, side, price, count):
+    """Close a position: selling YES = 'ask' at p; selling NO = buying YES leg at (1-p). reduce_only so it
+    can never open a new position."""
+    yes_price = price if side == "yes" else 1 - price
+    return {"ticker": ticker, "side": "ask" if side == "yes" else "bid", "count": str(int(count)),
+            "price": f"{yes_price:.4f}", "time_in_force": "immediate_or_cancel",
+            "self_trade_prevention_type": "taker_at_cross", "client_order_id": str(uuid.uuid4()),
+            "post_only": False, "reduce_only": True}
 
 
 def _cents_or_dollars(order, name):
@@ -255,6 +288,70 @@ class LiveTrader:
         if not filled:
             return f"Order sent but not filled (price moved). Try again next window."
         return f"FILLED: bought 1 {side.upper()} at {price:.2f} on {st['ticker']}"
+
+    def resync(self, get_market, series="KXBTC15M"):
+        """Rebuild live state from Kalshi after a restart: open positions (so take-profit and settlement keep
+        working) and today's settled results (so the daily loss cap can't reset by restarting)."""
+        if not self.client.ready:
+            return 0
+        n = 0
+        for status in ("unsettled", "settled"):
+            cursor = ""
+            for _ in range(10):
+                q = f"/portfolio/positions?count_filter=total_traded&settlement_status={status}&limit=200"
+                r = self.client.request("GET", q + (f"&cursor={cursor}" if cursor else ""))
+                for p in r.get("market_positions", []):
+                    tk = p.get("ticker", "")
+                    if not tk.startswith(series) or self.db.q("SELECT 1 FROM live_trades WHERE ticker=?", (tk,)):
+                        continue
+                    pos = float(p.get("position_fp") or 0)
+                    fees = float(p.get("fees_paid_dollars") or 0)
+                    ts = _parse_any_ts(p.get("last_updated_ts")) or time.time()
+                    if status == "unsettled" and pos:
+                        try:
+                            close_ts = datetime.fromisoformat(get_market(tk)["close_time"].replace("Z", "+00:00")).timestamp()
+                        except Exception:
+                            close_ts = time.time() + 900
+                        self.db.q("INSERT OR IGNORE INTO live_trades(ts,ticker,close_ts,side,limit_price,filled,cost,fee,status)"
+                                  " VALUES(?,?,?,?,?,?,?,?,'synced')",
+                                  (ts, tk, close_ts, "yes" if pos > 0 else "no", 0, int(abs(pos)),
+                                   float(p.get("market_exposure_dollars") or 0), fees))
+                        n += 1
+                    elif status == "settled" and ts >= self.today_start(time.time()):
+                        pnl = float(p.get("realized_pnl_dollars") or 0) - fees   # conservative: count fees as lost
+                        self.db.q("INSERT OR IGNORE INTO live_trades(ts,ticker,close_ts,side,limit_price,filled,cost,fee,"
+                                  "status,result,pnl) VALUES(?,?,?,?,0,0,0,0,'synced','settled',?)",
+                                  (ts, tk, ts, "yes", pnl))
+                        n += 1
+                cursor = r.get("cursor") or ""
+                if not cursor:
+                    break
+        return n
+
+    def take_profit(self, st, now, fee_fn):
+        """Sell open live positions in the current window as soon as the bid locks in a profit."""
+        if not st or not self.client.ready:
+            return
+        bids = {"yes": st.get("yes_bid"), "no": st.get("no_bid")}
+        rows = self.db.q("SELECT id, side, filled, cost, fee FROM live_trades WHERE ticker=? AND result IS NULL"
+                         " AND filled>0", (st["ticker"],))
+        for tid, side, filled, cost, fee in rows:
+            bid = bids.get(side)
+            if not bid:
+                continue
+            profit = bid * filled - fee_fn(filled, bid) - cost - fee
+            if profit < TAKE_PROFIT * filled:
+                continue
+            try:
+                o = self.client.sell_ioc(st["ticker"], side, bid, filled)
+            except Exception as e:
+                self.last_error = f"Sell failed: {e}"
+                continue
+            sold = int(float(o.get("fill_count") or 0))
+            if sold >= filled:
+                pnl = float(o["proceeds"]) - float(o["fees"]) - cost - fee
+                self.db.q("UPDATE live_trades SET result='sold', pnl=? WHERE id=?", (pnl, tid))
+                self.last_error = None
 
     def settle(self, now, fetch):
         rows = self.db.q("SELECT id, ticker, side, filled, cost, fee FROM live_trades"

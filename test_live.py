@@ -9,6 +9,11 @@ class FakeClient:
 
     def __init__(self):
         self.orders = []
+        self.sells = []
+
+    def sell_ioc(self, ticker, side, price, count):
+        self.sells.append((ticker, side, price, count))
+        return {"fill_count": count, "proceeds": price * count, "fees": 0.02}
 
     def buy_ioc(self, ticker, side, price, count):
         self.orders.append((ticker, side, price, count))
@@ -135,6 +140,48 @@ class T(unittest.TestCase):
         self.assertIn("FILLED", msg)
         self.assertEqual(self.c.orders[-1][1], "no")
         self.assertIn("Already traded", self.lt.test_trade(st, time.time(), M.taker_fee, "kid-123"))
+
+    def test_take_profit(self):
+        L.LIVE_MODE = "on"
+        now = time.time()
+        self.lt.maybe_trade(state("TP", ask=0.40, p_yes=0.60), "yes", now, M.taker_fee)  # cost .40 + .02
+        s = state("TP"); s.update(yes_bid=0.45, no_bid=0.50)
+        self.lt.take_profit(s, now, M.taker_fee)       # .45-.02-.42 = .01 < .03 -> hold
+        self.assertEqual(self.c.sells, [])
+        s.update(yes_bid=0.50)
+        self.lt.take_profit(s, now, M.taker_fee)       # .50-.02-.42 = .06 -> sell
+        self.assertEqual(self.c.sells[-1][:3], ("TP", "yes", 0.50))
+        r, pnl = self.db.q("SELECT result, pnl FROM live_trades WHERE ticker='TP'")[0]
+        self.assertEqual(r, "sold"); self.assertAlmostEqual(pnl, 0.50 - 0.02 - 0.40 - 0.02)
+        self.lt.take_profit(s, now, M.taker_fee)       # already sold -> no second sell
+        self.assertEqual(len(self.c.sells), 1)
+        L.LIVE_MODE = "auto"
+
+    def test_sell_body(self):
+        b = L._sell_body("X", "no", 0.70, 1)            # sell NO at 70c == buy YES at 30c
+        self.assertEqual((b["side"], b["price"], b["reduce_only"]), ("bid", "0.3000", True))
+        b = L._sell_body("X", "yes", 0.62, 1)
+        self.assertEqual((b["side"], b["price"]), ("ask", "0.6200"))
+
+    def test_resync(self):
+        now = time.time()
+        def req(method, ep, body=None):
+            if "unsettled" in ep:
+                return {"market_positions": [
+                    {"ticker": "KXBTC15M-OPEN", "position_fp": "-1.00", "market_exposure_dollars": "0.3300",
+                     "fees_paid_dollars": "0.0200", "last_updated_ts": int(now * 1000)},
+                    {"ticker": "OTHER-MKT", "position_fp": "5.00"}]}
+            return {"market_positions": [
+                {"ticker": "KXBTC15M-DONE", "position_fp": "0", "realized_pnl_dollars": "-0.6000",
+                 "fees_paid_dollars": "0.0200", "last_updated_ts": int(now)}]}
+        self.c.request = req
+        n = self.lt.resync(lambda tk: {"close_time": "2030-01-01T00:00:00Z"})
+        self.assertEqual(n, 2)
+        side, filled, cost = self.db.q("SELECT side, filled, cost FROM live_trades WHERE ticker='KXBTC15M-OPEN'")[0]
+        self.assertEqual((side, filled), ("no", 1)); self.assertAlmostEqual(cost, 0.33)
+        self.assertAlmostEqual(self.lt.today_pnl(now), -0.62)          # cap remembers today's loss
+        self.assertAlmostEqual(self.lt.at_risk(now), 0.62 + 0.35)
+        self.assertEqual(self.lt.resync(lambda tk: {}), 0)              # idempotent
 
     def test_dashboard_renders_live_card(self):
         e = M.Engine(self.db, self.lt)

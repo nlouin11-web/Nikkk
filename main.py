@@ -273,6 +273,11 @@ class Engine:
         self.db.q("INSERT INTO snapshots VALUES(?,?,?,?,?,?,?,?,?)",
                   (now, st["ticker"], st["yes_bid"], st["ask"]["yes"], st["no_bid"], st["ask"]["no"],
                    spot, st["strike"], st["p_yes"]))
+        if self.live:
+            try:
+                self.live.take_profit(st, now, taker_fee)
+            except Exception as e:
+                self.live.last_error = f"take-profit: {e}"
         for name, fn in STRATEGIES.items():
             try:
                 d = fn(st)
@@ -295,6 +300,11 @@ class Engine:
 
     def run(self):
         self.warm_up()
+        if self.live:
+            try:
+                print(f"Resynced {self.live.resync(get_market)} live positions from Kalshi", flush=True)
+            except Exception as e:
+                self.live.last_error = f"resync: {e}"
         while True:
             try:
                 self.step()
