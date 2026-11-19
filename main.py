@@ -366,6 +366,20 @@ def fmt_money(x):
     return f"{'-' if x < 0 else ''}${abs(x):,.2f}"
 
 
+def live_rows_html(lt):
+    rows = lt.recent()
+    if not rows:
+        return "<p><small>No live orders yet.</small></p>"
+    out = "<p><b>Live orders</b></p><table>"
+    for ts, tk, close_ts, side, limit, filled, cost, fee, status, result, pnl in rows:
+        t = datetime.fromtimestamp(ts, live_mod.LOCAL_TZ).strftime("%-I:%M %p")
+        what = (f"{side.upper()} x{filled} cost ${cost + fee:.2f}" if filled else
+                f"{side.upper()} @{limit:.2f} NOT FILLED" if limit else f"{side.upper()} (synced)")
+        res = "open" if result is None else (f"{result} {fmt_money(pnl)}" if pnl is not None else result)
+        out += f"<tr><td>{t}</td><td>{html.escape(what)}<br><small>{html.escape(status or '')}</small></td><td>{html.escape(res)}</td></tr>"
+    return out + "</table>"
+
+
 def render_dashboard(engine):
     db = engine.db
     stats = strategy_stats(db)
@@ -417,6 +431,7 @@ def render_dashboard(engine):
                      + f"<br><br>{btn}"
                      + (f"<p><b>Test result:</b> {html.escape(engine.status.get('test_msg') or '')}</p>"
                         if engine.status.get('test_msg') else "")
+                     + live_rows_html(engine.live)
                      + "<form method=post action=/test style='margin-top:10px'>"
                        "<input name=key_id placeholder='Paste Kalshi Key ID' style='padding:8px;width:60%'> "
                        "<button style='padding:8px 12px'>Test trade (1 contract)</button></form></div>")

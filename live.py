@@ -30,6 +30,7 @@ LIVE_MIN_EDGE = float(os.environ.get("LIVE_MIN_EDGE", "0.05"))   # model must be
 LIVE_MIN_PRICE = float(os.environ.get("LIVE_MIN_PRICE", "0.15"))  # no lottery tickets
 LIVE_MAX_PRICE = float(os.environ.get("LIVE_MAX_PRICE", "0.85"))  # no 95c bets where one loss wipes 20 wins
 BALANCE_FLOOR = float(os.environ.get("BALANCE_FLOOR", "6"))  # auto kill switch if Kalshi cash drops below this
+LIVE_SLIPPAGE = float(os.environ.get("LIVE_SLIPPAGE", "0.02"))  # max extra cents paid to get filled
 TAKE_PROFIT = float(os.environ.get("TAKE_PROFIT", "0.03"))  # sell once locked-in profit >= 3c/contract after all fees
 LIVE_MIN_MINUTES = float(os.environ.get("LIVE_MIN_MINUTES", "2"))  # skip the chaotic last 2 minutes
 KEY_ID = os.environ.get("KALSHI_KEY_ID", "").strip()
@@ -244,12 +245,18 @@ class LiveTrader:
             return None
         if self.db.q("SELECT 1 FROM live_trades WHERE ticker=?", (st["ticker"],)):
             return None
-        worst = price * LIVE_CONTRACTS + fee_fn(LIVE_CONTRACTS, price)
+        # allow up to 2c of slippage so the order actually fills, but only while the edge still clears the bar
+        limit = price
+        for bump in [b / 100 for b in range(int(round(LIVE_SLIPPAGE * 100)), 0, -1)]:
+            if prob - (price + bump) - fee_fn(1, price + bump) >= LIVE_MIN_EDGE and price + bump <= LIVE_MAX_PRICE:
+                limit = round(price + bump, 2)
+                break
+        worst = limit * LIVE_CONTRACTS + fee_fn(LIVE_CONTRACTS, limit)
         if self.at_risk(now) + worst > DAILY_LOSS_CAP + 1e-9:
             self.last_error = f"Daily loss cap ${DAILY_LOSS_CAP:.2f} reached, skipping"
             return None
         try:
-            o = self.client.buy_ioc(st["ticker"], side, price, LIVE_CONTRACTS)
+            o = self.client.buy_ioc(st["ticker"], side, limit, LIVE_CONTRACTS)
         except Exception as e:
             self.last_error = str(e)
             self.db.q("INSERT OR IGNORE INTO live_trades(ts,ticker,close_ts,side,limit_price,filled,cost,fee,status)"
@@ -259,8 +266,8 @@ class LiveTrader:
         cost, fee = float(o.get("cost") or 0), float(o.get("fees") or 0)
         self.db.q("INSERT OR IGNORE INTO live_trades(ts,ticker,close_ts,side,limit_price,filled,cost,fee,order_id,status)"
                   " VALUES(?,?,?,?,?,?,?,?,?,?)",
-                  (now, st["ticker"], st["close_ts"], side, price, filled, cost, fee, o.get("order_id"), o.get("status")))
-        self.last_error = None
+                  (now, st["ticker"], st["close_ts"], side, limit, filled, cost, fee, o.get("order_id"), o.get("status")))
+        self.last_error = None if filled else f"Last order not filled ({side.upper()} limit {limit:.2f}); price moved"
         return o
 
     def test_trade(self, st, now, fee_fn, key_id):
@@ -388,6 +395,10 @@ class LiveTrader:
             if res in ("yes", "no"):
                 pnl = (filled if res == side else 0) - cost - fee
                 self.db.q("UPDATE live_trades SET result=?, pnl=? WHERE id=?", (res, pnl, tid))
+
+    def recent(self, n=10):
+        return self.db.q("SELECT ts, ticker, close_ts, side, limit_price, filled, cost, fee, status, result, pnl"
+                         " FROM live_trades ORDER BY ts DESC LIMIT ?", (n,))
 
     def summary(self, now):
         ok, why = self.status()

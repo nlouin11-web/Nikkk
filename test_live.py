@@ -28,6 +28,7 @@ def state(ticker, ask=0.60, close=None, p_yes=0.85, min_left=5):
 
 class T(unittest.TestCase):
     def setUp(self):
+        L.LIVE_SLIPPAGE = 0.0
         self.db = M.DB(tempfile.mktemp(suffix=".db"))
         self.c = FakeClient()
         self.lt = L.LiveTrader(self.db, "x", M.strategy_stats, client=self.c)
@@ -194,6 +195,21 @@ class T(unittest.TestCase):
         self.lt.check_balance(1061.0)
         self.assertTrue(self.lt.killed)
         self.assertFalse(self.lt.status()[0])
+        L.LIVE_MODE = "auto"
+
+    def test_slippage_and_unfilled_visible(self):
+        L.LIVE_MODE = "on"
+        L.LIVE_SLIPPAGE = 0.02
+        now = time.time()
+        self.lt.maybe_trade(state("SL", ask=0.50, p_yes=0.70), "yes", now, M.taker_fee)  # edge .18 -> +2c ok
+        self.assertEqual(self.c.orders[-1][2], 0.52)
+        self.lt.maybe_trade(state("SL2", ask=0.50, p_yes=0.575), "yes", now, M.taker_fee)  # edge .055 -> no bump
+        self.assertEqual(self.c.orders[-1][2], 0.50)
+        self.c.buy_ioc = lambda *a: {"fill_count": 0, "cost": 0, "fees": 0, "status": "unfilled"}
+        self.lt.maybe_trade(state("SL3", ask=0.50, p_yes=0.70), "yes", now, M.taker_fee)
+        self.assertIn("not filled", self.lt.last_error)
+        page = M.live_rows_html(self.lt)
+        self.assertIn("NOT FILLED", page)
         L.LIVE_MODE = "auto"
 
     def test_dashboard_renders_live_card(self):
