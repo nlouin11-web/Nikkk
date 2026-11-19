@@ -109,6 +109,7 @@ class Kalshi:
                 "time_in_force": "immediate_or_cancel", "self_trade_prevention_type": "taker_at_cross",
                 "client_order_id": str(uuid.uuid4()), "post_only": False, "reduce_only": False}
         r = self.request("POST", "/portfolio/events/orders", body)
+        self.last_raw = {"sent": body, "got": r}   # for diagnosing unfilled orders
         filled = float(r.get("fill_count") or 0)
         avg_yes = float(r.get("average_fill_price") or yes_price) if filled else 0.0
         per = avg_yes if side == "yes" else 1 - avg_yes
@@ -281,7 +282,9 @@ class LiveTrader:
         self.db.q("INSERT OR IGNORE INTO live_trades(ts,ticker,close_ts,side,limit_price,filled,cost,fee,order_id,status)"
                   " VALUES(?,?,?,?,?,?,?,?,?,?)",
                   (now, st["ticker"], st["close_ts"], side, limit, filled, cost, fee, o.get("order_id"), o.get("status")))
-        self.last_error = None if filled else f"Last order not filled ({side.upper()} limit {limit:.2f}); price moved"
+        raw = getattr(self.client, "last_raw", None)
+        self.last_error = None if filled else (f"Last order not filled ({side.upper()} limit {limit:.2f}). "
+                                               f"Kalshi said: {json.dumps(raw)[:400] if raw else 'n/a'}")
         return o
 
     def test_trade(self, st, now, fee_fn, key_id):
