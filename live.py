@@ -98,11 +98,20 @@ class Kalshi:
         return self.request("GET", "/portfolio/balance")
 
     def buy_ioc(self, ticker, side, price, count):
-        price_cents = int(round(price * 100))
-        body = {"ticker": ticker, "side": side, "action": "buy", "count": count, "type": "limit",
-                "time_in_force": "immediate_or_cancel", "client_order_id": str(uuid.uuid4()),
-                f"{side}_price": price_cents}
-        return self.request("POST", "/portfolio/orders", body).get("order", {})
+        """Kalshi V2 orders are quoted on the YES leg: 'bid' buys YES, 'ask' sells YES.
+        Buying NO at p == selling YES at (1 - p). Returns a normalized dict in the side's terms."""
+        yes_price = price if side == "yes" else 1 - price
+        body = {"ticker": ticker, "side": "bid" if side == "yes" else "ask",
+                "count": str(int(count)), "price": f"{yes_price:.4f}",
+                "time_in_force": "immediate_or_cancel", "self_trade_prevention_type": "taker_at_cross",
+                "client_order_id": str(uuid.uuid4()), "post_only": False, "reduce_only": False}
+        r = self.request("POST", "/portfolio/events/orders", body)
+        filled = float(r.get("fill_count") or 0)
+        avg_yes = float(r.get("average_fill_price") or yes_price) if filled else 0.0
+        per = avg_yes if side == "yes" else 1 - avg_yes
+        return {"order_id": r.get("order_id"), "status": "filled" if filled else "unfilled",
+                "fill_count": filled, "cost": round(per * filled, 4),
+                "fees": round(float(r.get("average_fee_paid") or 0) * filled, 4)}
 
 
 def _cents_or_dollars(order, name):
@@ -206,9 +215,8 @@ class LiveTrader:
             self.db.q("INSERT OR IGNORE INTO live_trades(ts,ticker,close_ts,side,limit_price,filled,cost,fee,status)"
                       " VALUES(?,?,?,?,?,0,0,0,'error')", (now, st["ticker"], st["close_ts"], side, price))
             return None
-        filled = int(float(o.get("fill_count_fp") or o.get("fill_count") or 0))
-        cost = _cents_or_dollars(o, "taker_fill_cost") + _cents_or_dollars(o, "maker_fill_cost")
-        fee = _cents_or_dollars(o, "taker_fees") + _cents_or_dollars(o, "maker_fees")
+        filled = int(float(o.get("fill_count") or 0))
+        cost, fee = float(o.get("cost") or 0), float(o.get("fees") or 0)
         self.db.q("INSERT OR IGNORE INTO live_trades(ts,ticker,close_ts,side,limit_price,filled,cost,fee,order_id,status)"
                   " VALUES(?,?,?,?,?,?,?,?,?,?)",
                   (now, st["ticker"], st["close_ts"], side, price, filled, cost, fee, o.get("order_id"), o.get("status")))

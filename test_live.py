@@ -12,8 +12,8 @@ class FakeClient:
 
     def buy_ioc(self, ticker, side, price, count):
         self.orders.append((ticker, side, price, count))
-        return {"order_id": "o1", "status": "executed", "fill_count": count,
-                "taker_fill_cost_dollars": f"{price*count:.4f}", "taker_fees_dollars": "0.0200"}
+        return {"order_id": "o1", "status": "filled", "fill_count": count,
+                "cost": price * count, "fees": 0.02}
 
 
 def state(ticker, ask=0.60, close=None, p_yes=0.85, min_left=5):
@@ -105,6 +105,27 @@ class T(unittest.TestCase):
         self.assertIsNotNone(self.lt.maybe_trade(state("P7", ask=0.50, p_yes=0.30), "no", now, f))   # NO side, prob .70
         self.assertEqual(len(self.c.orders), 2)
         L.LIVE_MODE = "auto"
+
+    def test_v2_order_body_and_parsing(self):
+        sent = {}
+        k = L.Kalshi("https://x/trade-api/v2", key=None, key_id="kid")
+        def fake_request(method, ep, body=None):
+            sent.update(method=method, ep=ep, body=body)
+            return {"order_id": "abc", "fill_count": "1.00", "remaining_count": "0.00",
+                    "average_fill_price": "0.5400", "average_fee_paid": "0.0200", "ts_ms": 1}
+        k.request = fake_request
+        o = k.buy_ioc("KXBTC15M-X", "no", 0.46, 1)   # buy NO at 46c == sell YES at 54c
+        self.assertEqual(sent["ep"], "/portfolio/events/orders")
+        self.assertEqual(sent["body"]["side"], "ask")
+        self.assertEqual(sent["body"]["price"], "0.5400")
+        self.assertEqual(sent["body"]["count"], "1")
+        self.assertEqual(sent["body"]["time_in_force"], "immediate_or_cancel")
+        self.assertAlmostEqual(o["cost"], 0.46)
+        self.assertAlmostEqual(o["fees"], 0.02)
+        o = k.buy_ioc("KXBTC15M-X", "yes", 0.55, 1)
+        self.assertEqual(sent["body"]["side"], "bid")
+        self.assertEqual(sent["body"]["price"], "0.5500")
+        self.assertAlmostEqual(o["cost"], 0.54)  # filled at avg 0.54 YES
 
     def test_dashboard_renders_live_card(self):
         e = M.Engine(self.db, self.lt)
