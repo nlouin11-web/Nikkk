@@ -31,7 +31,7 @@ LIVE_MIN_PRICE = float(os.environ.get("LIVE_MIN_PRICE", "0.15"))  # no lottery t
 LIVE_MAX_PRICE = float(os.environ.get("LIVE_MAX_PRICE", "0.85"))  # no 95c bets where one loss wipes 20 wins
 BALANCE_FLOOR = float(os.environ.get("BALANCE_FLOOR", "6"))  # auto kill switch if Kalshi cash drops below this
 LIVE_SLIPPAGE = float(os.environ.get("LIVE_SLIPPAGE", "0.02"))  # max extra cents paid to get filled
-EVERY_WINDOW = os.environ.get("LIVE_EVERY_WINDOW", "1") == "1"   # if nothing cleared the edge bar, buy the best side anyway
+EVERY_WINDOW = os.environ.get("LIVE_EVERY_WINDOW", "0") == "1"   # if nothing cleared the edge bar, buy the best side anyway
 TAKE_PROFIT = float(os.environ.get("TAKE_PROFIT", "0.03"))  # sell once locked-in profit >= 3c/contract after all fees
 LIVE_MIN_MINUTES = float(os.environ.get("LIVE_MIN_MINUTES", "2"))  # skip the chaotic last 2 minutes
 KEY_ID = os.environ.get("KALSHI_KEY_ID", "").strip()

@@ -31,7 +31,7 @@ import backtest as bt_mod
 # ---------------------------------------------------------------- config
 KALSHI = os.environ.get("KALSHI_BASE", "https://api.elections.kalshi.com/trade-api/v2")
 SERIES = os.environ.get("SERIES", "KXBTC15M")
-POLL_SECONDS = float(os.environ.get("POLL_SECONDS", "5"))
+POLL_SECONDS = float(os.environ.get("POLL_SECONDS", "1"))
 CONTRACTS = int(os.environ.get("CONTRACTS", "10"))
 FEE_RATE = 0.07            # Kalshi taker fee: 0.07 * C * P * (1-P), rounded up to the cent
 MIN_SETTLED_FOR_VERDICT = 300
@@ -280,9 +280,11 @@ class Engine:
             self.status.update(window=None)
             return None
         st = self.snapshot_state(m, now, spot)
-        self.db.q("INSERT INTO snapshots VALUES(?,?,?,?,?,?,?,?,?)",
-                  (now, st["ticker"], st["yes_bid"], st["ask"]["yes"], st["no_bid"], st["ask"]["no"],
-                   spot, st["strike"], st["p_yes"]))
+        if now - getattr(self, "_snap_ts", 0) >= 5:
+            self._snap_ts = now
+            self.db.q("INSERT INTO snapshots VALUES(?,?,?,?,?,?,?,?,?)",
+                      (now, st["ticker"], st["yes_bid"], st["ask"]["yes"], st["no_bid"], st["ask"]["no"],
+                       spot, st["strike"], st["p_yes"]))
         if self.live:
             self.live.check_balance(now)
             try:
