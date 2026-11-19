@@ -64,7 +64,8 @@ def fetch_markets(http_json, base, series, start):
     except Exception:
         pass
     return [m for m in out if (m.get("result") or "").lower() in ("yes", "no")
-            and str(m.get("ticker", "")).startswith(series + "-")]
+            and str(m.get("ticker", "")).startswith(series + "-")
+            and m.get("close_time") and _ts(m["close_time"]) >= start]
 
 
 def fetch_candles(http_json, base, series, m):
@@ -123,6 +124,31 @@ def simulate_window(m, candles, btc, fair_prob, fee_fn):
     return None
 
 
+def simulate_trend12(m, candles, fee_fn):
+    """Nick's rule: at the 12-minutes-left mark, buy whichever side is leading, at the ask, hold to close."""
+    close = _ts(m["close_time"])
+    best = None
+    for cd in candles:
+        mins = (close - int(cd["end_period_ts"])) / 60
+        if 11.5 <= mins <= 12.5:
+            best = cd
+            break
+    if not best:
+        return None
+    ya = _f(best.get("yes_ask", {}).get("close_dollars"))
+    yb = _f(best.get("yes_bid", {}).get("close_dollars"))
+    if not (ya and yb):
+        return None
+    side = "yes" if (ya + yb) / 2 >= 0.5 else "no"
+    ask = ya if side == "yes" else 1 - yb
+    if not (0.01 < ask < 0.99):
+        return None
+    fee = fee_fn(1, ask)
+    won = m["result"].lower() == side
+    return {"ticker": m["ticker"], "side": side, "price": ask, "fee": fee, "minutes_left": 12,
+            "result": m["result"].lower(), "pnl": (1 if won else 0) - ask - fee}
+
+
 def _f(v):
     try:
         f = float(v)
@@ -133,8 +159,9 @@ def _f(v):
 
 def run(db, http_json, base, fair_prob, fee_fn, series="KXBTC15M", status=None):
     status = status if status is not None else {}
-    db.q("""CREATE TABLE IF NOT EXISTS backtest(ticker TEXT PRIMARY KEY, side TEXT, price REAL, fee REAL,
-            minutes_left REAL, result TEXT, pnl REAL)""")
+    for tbl in ("backtest", "backtest_trend12"):
+        db.q(f"""CREATE TABLE IF NOT EXISTS {tbl}(ticker TEXT PRIMARY KEY, side TEXT, price REAL, fee REAL,
+                minutes_left REAL, result TEXT, pnl REAL)""")
     now = time.time()
     start = now - DAYS * 86400
     status.update(state="loading BTC history")
@@ -144,22 +171,28 @@ def run(db, http_json, base, fair_prob, fee_fn, series="KXBTC15M", status=None):
     status.update(state="replaying", windows=len(markets), done=0)
     for i, m in enumerate(markets):
         try:
-            tr = simulate_window(m, fetch_candles(http_json, base, series, m), btc, fair_prob, fee_fn)
+            cds = fetch_candles(http_json, base, series, m)
         except Exception:
-            tr = None
-        if tr:
-            db.q("INSERT OR REPLACE INTO backtest VALUES(?,?,?,?,?,?,?)",
-                 (tr["ticker"], tr["side"], tr["price"], tr["fee"], tr["minutes_left"], tr["result"], tr["pnl"]))
+            cds = []
+        for tbl, fn in (("backtest", lambda: simulate_window(m, cds, btc, fair_prob, fee_fn)),
+                        ("backtest_trend12", lambda: simulate_trend12(m, cds, fee_fn))):
+            try:
+                tr = fn()
+            except Exception:
+                tr = None
+            if tr:
+                db.q(f"INSERT OR REPLACE INTO {tbl} VALUES(?,?,?,?,?,?,?)",
+                     (tr["ticker"], tr["side"], tr["price"], tr["fee"], tr["minutes_left"], tr["result"], tr["pnl"]))
         status["done"] = i + 1
         time.sleep(0.08)
     status.update(state="done", finished=time.time())
     return stats(db)
 
 
-def stats(db):
+def stats(db, table="backtest"):
     try:
-        rows = [r[0] for r in db.q("SELECT pnl FROM backtest")]
-        wins = db.q("SELECT COUNT(*) FROM backtest WHERE side=result")[0][0]
+        rows = [r[0] for r in db.q(f"SELECT pnl FROM {table}")]
+        wins = db.q(f"SELECT COUNT(*) FROM {table} WHERE side=result")[0][0]
     except Exception:
         return {"n": 0}
     n = len(rows)

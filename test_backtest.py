@@ -49,6 +49,17 @@ class T(unittest.TestCase):
         self.assertEqual(s["n"], 1)
         self.assertFalse(s["edge"])                 # < 300 trades never counts as edge
 
+    def test_trend12(self):
+        c = 1_800_000_000
+        m = {"ticker": "KXBTC15M-T", "close_time": iso(c), "result": "yes"}
+        candles = [{"end_period_ts": c - 12 * 60, "yes_ask": {"close_dollars": "0.6800"},
+                    "yes_bid": {"close_dollars": "0.6600"}}]
+        tr = B.simulate_trend12(m, candles, M.taker_fee)
+        self.assertEqual(tr["side"], "yes")
+        self.assertAlmostEqual(tr["pnl"], 1 - 0.68 - M.taker_fee(1, 0.68))
+        m["result"] = "no"
+        self.assertLess(B.simulate_trend12(m, candles, M.taker_fee)["pnl"], -0.68)
+
     def test_auto_gate_uses_backtest(self):
         db = M.DB(tempfile.mktemp(suffix=".db"))
         class C: ready = True

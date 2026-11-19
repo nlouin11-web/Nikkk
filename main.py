@@ -171,6 +171,14 @@ def s_leader_8m(st):
             return side, f"leader at {st['yes_mid']:.2f} mid"
 
 
+def s_trend_12m(st):
+    """Nick's rule: at 12 minutes left, follow the leader."""
+    if 11.5 <= st["min_left"] <= 12.5 and st["yes_mid"] is not None:
+        side = "yes" if st["yes_mid"] >= 0.5 else "no"
+        if st["ask"][side] and st["ask"][side] < 0.99:
+            return side, f"trend at 12m: mid {st['yes_mid']:.2f}"
+
+
 EDGE = float(os.environ.get("FAIR_EDGE", "0.04"))
 
 
@@ -191,6 +199,7 @@ STRATEGIES = {
     "momentum_open": s_momentum_open,
     "leader_8min": s_leader_8m,
     "fair_value": s_fair_value,
+    "trend_12m": s_trend_12m,
 }
 
 
@@ -424,6 +433,12 @@ def render_dashboard(engine):
     else:
         bt_html = (f"<div class=card><b>Backtest</b> <small>{html.escape(str(bs.get('state','not started')))} "
                    f"{bs.get('done','')}/{bs.get('windows','')}</small></div>")
+    t12 = bt_mod.stats(db, "backtest_trend12")
+    if t12.get("n"):
+        se2 = f" ±{2*t12['se_cents']:.1f}" if t12.get("se_cents") else ""
+        bt_html += (f"<div class=card><b>Backtest: your trend_12m rule</b> <small>(follow leader at 12 min left)</small><br>"
+                    f"{t12['n']} trades · win {t12['win_rate']*100:.1f}% · {t12['cents']:+.2f}¢{se2}/contract after fees<br>"
+                    f"<b>{'EDGE FOUND' if t12['edge'] else ('No proven edge' if t12['n'] >= 300 else 'Collecting')}</b></div>")
     err = engine.status.get("error")
     age = f"{now - engine.status['last_ok']:.0f}s ago" if engine.status.get("last_ok") else "never"
     return f"""<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1">
