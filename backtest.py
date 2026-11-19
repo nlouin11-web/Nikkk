@@ -177,6 +177,71 @@ def simulate_trend12_tp(m, candles, fee_fn, tp=None):
     return entry
 
 
+def build_ctx(m, candles, btc, fair_prob):
+    """Per-minute view of a window for the strategy library."""
+    close = _ts(m["close_time"])
+    strike = m.get("floor_strike")
+    out = []
+    for cd in sorted(candles, key=lambda x: x["end_period_ts"]):
+        t = int(cd["end_period_ts"])
+        mins = (close - t) / 60
+        if mins < 0.5:
+            continue
+        minute = t - 60 - (t % 60)
+        spot = btc.get(minute) or btc.get(minute - 60)
+        ya = _f(cd.get("yes_ask", {}).get("close_dollars"))
+        yb = _f(cd.get("yes_bid", {}).get("close_dollars"))
+        mid = (ya + yb) / 2 if ya and yb else None
+        sig = sigma_at(btc, minute)
+        def ret(k):
+            a = btc.get(minute - k * 60)
+            return (spot / a - 1) if (spot and a) else None
+        c = {"t": t, "mins": mins, "ya": ya, "yb": yb, "mid": mid, "spot": spot,
+             "p": fair_prob(spot, float(strike), mins, sig) if (spot and strike and sig) else None,
+             "r1": ret(1), "r2": ret(2), "r15": ret(15)}
+        c["dmid2"] = (mid - out[-2]["mid"]) if (mid is not None and len(out) >= 2 and out[-2]["mid"] is not None) else None
+        out.append(c)
+    return out
+
+
+def run_library(db, m, ctx, prev, fee_fn):
+    import strategies
+    for name, fn in strategies.LIBRARY.items():
+        try:
+            r = fn(ctx, prev, fee_fn)
+        except Exception:
+            r = None
+        if not r:
+            continue
+        side, c = r
+        ask = c["ya"] if side == "yes" else 1 - c["yb"]
+        fee = fee_fn(1, ask)
+        won = m["result"].lower() == side
+        db.q("INSERT OR REPLACE INTO backtest_multi VALUES(?,?,?,?)",
+             (name, m["ticker"], (1 if won else 0) - ask - fee, 1 if won else 0))
+
+
+def leaderboard(db):
+    import math as _m
+    try:
+        rows = db.q("SELECT strategy, pnl, won FROM backtest_multi")
+    except Exception:
+        return []
+    by = {}
+    for name, pnl, won in rows:
+        by.setdefault(name, []).append((pnl, won))
+    out = []
+    for name, xs in by.items():
+        n = len(xs)
+        mean = sum(p for p, _ in xs) / n
+        se = _m.sqrt(sum((p - mean) ** 2 for p, _ in xs) / (n - 1)) / _m.sqrt(n) if n > 1 else 0
+        out.append({"name": name, "n": n, "win": sum(w for _, w in xs) / n, "cents": mean * 100,
+                    "lo": (mean - 2 * se) * 100, "hi": (mean + 2 * se) * 100,
+                    "verdict": ("EDGE" if n >= 300 and mean - 2 * se > 0 else
+                                "LOSES" if n >= 100 and mean + 2 * se < 0 else "unclear")})
+    return sorted(out, key=lambda r: r["cents"], reverse=True)
+
+
 def _f(v):
     try:
         f = float(v)
@@ -187,6 +252,8 @@ def _f(v):
 
 def run(db, http_json, base, fair_prob, fee_fn, series="KXBTC15M", status=None):
     status = status if status is not None else {}
+    db.q("CREATE TABLE IF NOT EXISTS backtest_multi(strategy TEXT, ticker TEXT, pnl REAL, won INTEGER,"
+         " PRIMARY KEY(strategy, ticker))")
     for tbl in ("backtest", "backtest_trend12", "backtest_trend12_tp"):
         db.q(f"""CREATE TABLE IF NOT EXISTS {tbl}(ticker TEXT PRIMARY KEY, side TEXT, price REAL, fee REAL,
                 minutes_left REAL, result TEXT, pnl REAL)""")
@@ -196,12 +263,18 @@ def run(db, http_json, base, fair_prob, fee_fn, series="KXBTC15M", status=None):
     btc = fetch_btc_minutes(http_json, start - 2 * 3600, now)
     status.update(state="loading Kalshi windows")
     markets = fetch_markets(http_json, base, series, start)
+    markets.sort(key=lambda x: _ts(x["close_time"]))
     status.update(state="replaying", windows=len(markets), done=0)
+    prev_by_close = {_ts(x["close_time"]): x["result"].lower() for x in markets}
     for i, m in enumerate(markets):
         try:
             cds = fetch_candles(http_json, base, series, m)
         except Exception:
             cds = []
+        try:
+            run_library(db, m, build_ctx(m, cds, btc, fair_prob), prev_by_close.get(_ts(m["open_time"])), fee_fn)
+        except Exception:
+            pass
         for tbl, fn in (("backtest", lambda: simulate_window(m, cds, btc, fair_prob, fee_fn)),
                         ("backtest_trend12", lambda: simulate_trend12(m, cds, fee_fn)),
                         ("backtest_trend12_tp", lambda: simulate_trend12_tp(m, cds, fee_fn))):

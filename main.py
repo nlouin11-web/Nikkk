@@ -467,6 +467,15 @@ def render_dashboard(engine):
                     f"{tp['n']} trades · profitable {tp['win_rate']*100:.1f}% · cashed out early {sold} · "
                     f"{tp['cents']:+.2f}¢{se3}/contract after fees<br>"
                     f"<b>{'EDGE FOUND' if tp['edge'] else ('No proven edge' if tp['n'] >= 300 else 'Collecting')}</b></div>")
+    lb = bt_mod.leaderboard(db)
+    if lb:
+        rows_lb = "".join(
+            f"<tr><td>{html.escape(r['name'])}</td><td>{r['n']}</td><td>{r['win']*100:.0f}%</td>"
+            f"<td style='color:{'#16a34a' if r['cents']>0 else '#dc2626'}'>{r['cents']:+.2f}¢<br>"
+            f"<small>{r['lo']:+.1f} to {r['hi']:+.1f}</small></td><td><b>{r['verdict']}</b></td></tr>" for r in lb)
+        bt_html += (f"<div class=card><b>Strategy leaderboard</b> <small>(30 days of real windows, 1 contract, after fees)</small>"
+                    f"<table><tr><th>Strategy</th><th>Trades</th><th>Win</th><th>Per trade</th><th></th></tr>{rows_lb}</table>"
+                    f"<small>EDGE = whole range above 0 over 300+ trades. LOSES = whole range below 0.</small></div>")
     err = engine.status.get("error")
     age = f"{now - engine.status['last_ok']:.0f}s ago" if engine.status.get("last_ok") else "never"
     return f"""<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1">

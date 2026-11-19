@@ -74,6 +74,26 @@ class T(unittest.TestCase):
         self.assertEqual(tr2["result"], "no")         # never hit target -> held, lost
         self.assertLess(tr2["pnl"], -0.6)
 
+    def test_library_runs(self):
+        import strategies as S
+        c = 1_800_000_000
+        o = c - 900
+        btc = {t: 60000 + (t - o) / 60 * 10 for t in range(o - 7200, c + 60, 60)}   # steady uptrend
+        m = {"ticker": "KXBTC15M-L", "open_time": iso(o), "close_time": iso(c), "floor_strike": 60000, "result": "yes"}
+        candles = [{"end_period_ts": t, "yes_ask": {"close_dollars": "0.5500"}, "yes_bid": {"close_dollars": "0.5300"}}
+                   for t in range(o + 60, c + 1, 60)]
+        ctx = B.build_ctx(m, candles, btc, M.fair_yes_prob)
+        self.assertTrue(ctx and ctx[0]["r1"] > 0)
+        db = M.DB(tempfile.mktemp(suffix=".db"))
+        db.q("CREATE TABLE backtest_multi(strategy TEXT, ticker TEXT, pnl REAL, won INTEGER, PRIMARY KEY(strategy, ticker))")
+        B.run_library(db, m, ctx, "yes", M.taker_fee)
+        names = {r[0] for r in db.q("SELECT strategy FROM backtest_multi")}
+        self.assertIn("momentum_1m", names)
+        self.assertIn("previous", names)
+        self.assertIn("leader_12m (your rule)", names)
+        lb = B.leaderboard(db)
+        self.assertTrue(all("verdict" in r for r in lb))
+
     def test_auto_gate_uses_backtest(self):
         db = M.DB(tempfile.mktemp(suffix=".db"))
         class C: ready = True
