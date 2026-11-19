@@ -16,8 +16,9 @@ class FakeClient:
                 "taker_fill_cost_dollars": f"{price*count:.4f}", "taker_fees_dollars": "0.0200"}
 
 
-def state(ticker, ask=0.60, close=None):
-    return {"ticker": ticker, "close_ts": close or time.time() + 300, "ask": {"yes": ask, "no": 1 - ask}}
+def state(ticker, ask=0.60, close=None, p_yes=0.85, min_left=5):
+    return {"ticker": ticker, "close_ts": close or time.time() + 300, "ask": {"yes": ask, "no": 1 - ask},
+            "p_yes": p_yes, "min_left": min_left}
 
 
 class T(unittest.TestCase):
@@ -66,7 +67,7 @@ class T(unittest.TestCase):
     def test_settle(self):
         L.LIVE_MODE = "on"
         past = time.time() - 60
-        self.lt.maybe_trade(state("S", ask=0.40, close=past), "yes", past - 100, M.taker_fee)
+        self.lt.maybe_trade(state("S", ask=0.40, close=past, p_yes=0.60), "yes", past - 100, M.taker_fee)
         self.lt.settle(time.time(), lambda t: {"result": "yes"})
         pnl = self.db.q("SELECT pnl FROM live_trades WHERE ticker='S'")[0][0]
         self.assertAlmostEqual(pnl, 1 - 0.40 - 0.02)
@@ -90,6 +91,20 @@ class T(unittest.TestCase):
                                         salt_length=32), hashes.SHA256())
             else:
                 key.public_key().verify(sig, msg)
+
+    def test_safety_filters(self):
+        L.LIVE_MODE = "on"
+        now = time.time()
+        f = M.taker_fee
+        self.assertIsNone(self.lt.maybe_trade(state("P1", ask=0.90, p_yes=0.99), "yes", now, f))  # too pricey
+        self.assertIsNone(self.lt.maybe_trade(state("P2", ask=0.10, p_yes=0.40), "yes", now, f))  # lottery
+        self.assertIsNone(self.lt.maybe_trade(state("P3", ask=0.60, p_yes=0.65), "yes", now, f))  # edge too small
+        self.assertIsNone(self.lt.maybe_trade(state("P4", ask=0.60, p_yes=0.90, min_left=1), "yes", now, f))  # too late
+        self.assertIsNone(self.lt.maybe_trade(state("P5", ask=0.60, p_yes=None), "yes", now, f))  # no model
+        self.assertIsNotNone(self.lt.maybe_trade(state("P6", ask=0.60, p_yes=0.75), "yes", now, f))  # 15c edge -> ok
+        self.assertIsNotNone(self.lt.maybe_trade(state("P7", ask=0.50, p_yes=0.30), "no", now, f))   # NO side, prob .70
+        self.assertEqual(len(self.c.orders), 2)
+        L.LIVE_MODE = "auto"
 
     def test_dashboard_renders_live_card(self):
         e = M.Engine(self.db, self.lt)

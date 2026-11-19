@@ -25,6 +25,11 @@ LIVE_MODE = os.environ.get("LIVE_MODE", "auto").lower()          # off | auto | 
 LIVE_STRATEGY = os.environ.get("LIVE_STRATEGY", "fair_value")
 LIVE_CONTRACTS = int(os.environ.get("LIVE_CONTRACTS", "1"))
 DAILY_LOSS_CAP = float(os.environ.get("DAILY_LOSS_CAP", "5"))
+# "Safer trade" filters for real money (stricter than paper):
+LIVE_MIN_EDGE = float(os.environ.get("LIVE_MIN_EDGE", "0.08"))   # model must beat price+fee by 8c
+LIVE_MIN_PRICE = float(os.environ.get("LIVE_MIN_PRICE", "0.20"))  # no lottery tickets
+LIVE_MAX_PRICE = float(os.environ.get("LIVE_MAX_PRICE", "0.80"))  # no 95c bets where one loss wipes 20 wins
+LIVE_MIN_MINUTES = float(os.environ.get("LIVE_MIN_MINUTES", "2"))  # skip the chaotic last 2 minutes
 KEY_ID = os.environ.get("KALSHI_KEY_ID", "").strip()
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "").strip()
 
@@ -180,7 +185,13 @@ class LiveTrader:
         if not ok:
             return None
         price = st["ask"][side]
-        if not price or price >= 0.99:
+        if not price or not (LIVE_MIN_PRICE <= price <= LIVE_MAX_PRICE):
+            return None
+        p_yes = st.get("p_yes")
+        if p_yes is None or st.get("min_left", 99) < LIVE_MIN_MINUTES:
+            return None
+        prob = p_yes if side == "yes" else 1 - p_yes
+        if prob - price - fee_fn(1, price) < LIVE_MIN_EDGE:
             return None
         if self.db.q("SELECT 1 FROM live_trades WHERE ticker=?", (st["ticker"],)):
             return None
