@@ -26,9 +26,9 @@ LIVE_STRATEGY = os.environ.get("LIVE_STRATEGY", "fair_value")
 LIVE_CONTRACTS = int(os.environ.get("LIVE_CONTRACTS", "1"))
 DAILY_LOSS_CAP = float(os.environ.get("DAILY_LOSS_CAP", "5"))
 # "Safer trade" filters for real money (stricter than paper):
-LIVE_MIN_EDGE = float(os.environ.get("LIVE_MIN_EDGE", "0.08"))   # model must beat price+fee by 8c
-LIVE_MIN_PRICE = float(os.environ.get("LIVE_MIN_PRICE", "0.20"))  # no lottery tickets
-LIVE_MAX_PRICE = float(os.environ.get("LIVE_MAX_PRICE", "0.80"))  # no 95c bets where one loss wipes 20 wins
+LIVE_MIN_EDGE = float(os.environ.get("LIVE_MIN_EDGE", "0.05"))   # model must beat price+fee by 5c
+LIVE_MIN_PRICE = float(os.environ.get("LIVE_MIN_PRICE", "0.15"))  # no lottery tickets
+LIVE_MAX_PRICE = float(os.environ.get("LIVE_MAX_PRICE", "0.85"))  # no 95c bets where one loss wipes 20 wins
 LIVE_MIN_MINUTES = float(os.environ.get("LIVE_MIN_MINUTES", "2"))  # skip the chaotic last 2 minutes
 KEY_ID = os.environ.get("KALSHI_KEY_ID", "").strip()
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "").strip()
