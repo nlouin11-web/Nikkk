@@ -39,7 +39,7 @@ class T(unittest.TestCase):
                 return [[t, 0, 0, 0, v, 0] for t, v in btc.items()]
             if "/candlesticks" in url:
                 return {"candlesticks": candles}
-            return {"markets": [m, dict(m, ticker="KXBTC15M-OPEN", result="")]}
+            return {"markets": [m, dict(m, ticker="KXBTC15M-OPEN", result=""), dict(m, ticker="OTHERMKT-1")]}
         db = M.DB(tempfile.mktemp(suffix=".db"))
         st = {}
         B.time.sleep = lambda s: None

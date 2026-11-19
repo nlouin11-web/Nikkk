@@ -63,7 +63,8 @@ def fetch_markets(http_json, base, series, start):
                 break
     except Exception:
         pass
-    return [m for m in out if (m.get("result") or "").lower() in ("yes", "no")]
+    return [m for m in out if (m.get("result") or "").lower() in ("yes", "no")
+            and str(m.get("ticker", "")).startswith(series + "-")]
 
 
 def fetch_candles(http_json, base, series, m):
