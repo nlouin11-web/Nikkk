@@ -94,6 +94,19 @@ class T(unittest.TestCase):
         lb = B.leaderboard(db)
         self.assertTrue(all("verdict" in r for r in lb))
 
+    def test_dump_lock(self):
+        import strategies as S
+        mk = lambda mins, ya, yb: {"mins": mins, "ya": ya, "yb": yb}
+        f = S.dump_lock()
+        # YES dumps to .30, later bid recovers to .40 -> locked profit
+        ctx = [mk(12, 0.50, 0.48), mk(10, 0.30, 0.28), mk(8, 0.36, 0.34), mk(6, 0.42, 0.40)]
+        r = f(ctx, None, M.taker_fee, "no")
+        self.assertTrue(r["locked"]); self.assertGreater(r["pnl"], 0.02)
+        # never recovers, NO wins -> lose the 30c + fee
+        ctx2 = [mk(12, 0.50, 0.48), mk(10, 0.30, 0.28), mk(5, 0.20, 0.18)]
+        r2 = f(ctx2, None, M.taker_fee, "no")
+        self.assertFalse(r2["locked"]); self.assertAlmostEqual(r2["pnl"], -(0.30 + M.taker_fee(1, 0.30)))
+
     def test_auto_gate_uses_backtest(self):
         db = M.DB(tempfile.mktemp(suffix=".db"))
         class C: ready = True

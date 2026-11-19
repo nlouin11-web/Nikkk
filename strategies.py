@@ -117,6 +117,61 @@ def value_previous(ctx, prev, fee):
     return first(ctx, lambda c: prev if (_ask(c, prev) or 1) <= 0.45 else None, 3, 14.5)
 
 
+def dump_lock(entry_max=0.35, lock_margin=0.02, min_left_entry=5):
+    """Dump-and-hedge, Kalshi version. Buy a side once it dumps to <= 35c. On Kalshi, 'hedging' with the
+    other side nets out the position, i.e. selling it back: lock in as soon as the bid covers entry +
+    both fees + margin. Otherwise hold to settlement. Returns a custom result with its own pnl."""
+    def f(ctx, prev, fee, result):
+        entry = None
+        for c in ctx:
+            if entry is None:
+                if c["mins"] < min_left_entry:
+                    return None
+                for side in ("yes", "no"):
+                    a = _ask(c, side)
+                    if a and 0.05 <= a <= entry_max:
+                        entry = (side, a, a + fee(1, a))
+                        break
+                continue
+            side, a, cost = entry
+            bid = c["yb"] if side == "yes" else (1 - c["ya"] if c["ya"] else None)
+            if bid and bid - fee(1, bid) - cost >= lock_margin:
+                return {"side": side, "price": a, "pnl": bid - fee(1, bid) - cost, "won": 1, "locked": True}
+        if not entry:
+            return None
+        side, a, cost = entry
+        return {"side": side, "price": a, "pnl": (1 if result == side else 0) - cost,
+                "won": 1 if result == side else 0, "locked": False}
+    f.custom = True
+    return f
+
+
+def early_favorite(lo=0.85, hi=0.95):
+    """Published rule (out-of-sample positive on Polymarket): 10-15 min left, buy the favorite at 85-95c."""
+    def f(ctx, prev, fee):
+        def cond(c):
+            for side in ("yes", "no"):
+                a = _ask(c, side)
+                if a and lo <= a <= hi:
+                    return side
+        return first(ctx, cond, 10, 15)
+    return f
+
+
+def late_momentum(min_move=0.002):
+    """Published rule: minutes 8-12 (3-7 left), buy the side BTC has moved >0.20% toward since the open."""
+    def f(ctx, prev, fee):
+        def cond(c):
+            if not ctx or not ctx[0]["spot"] or not c["spot"]:
+                return None
+            move = c["spot"] / ctx[0]["spot"] - 1
+            if abs(move) < min_move:
+                return None
+            return "yes" if move > 0 else "no"
+        return first(ctx, cond, 3, 7)
+    return f
+
+
 LIBRARY = {
     "fair_value_5c (current live)": fair_edge(0.05),
     "fair_value_10c": fair_edge(0.10),
@@ -133,4 +188,7 @@ LIBRARY = {
     "latency_lag": latency_lag(),
     "mean_reversion": mean_reversion(),
     "late_favorite_90-97c": late_favorite,
+    "dump_and_lock (<=35c, lock +2c)": dump_lock(),
+    "early_favorite_85-95c (10-15m)": early_favorite(),
+    "late_momentum_0.20%": late_momentum(),
 }

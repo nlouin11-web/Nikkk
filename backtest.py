@@ -207,6 +207,14 @@ def build_ctx(m, candles, btc, fair_prob):
 def run_library(db, m, ctx, prev, fee_fn):
     import strategies
     for name, fn in strategies.LIBRARY.items():
+        if getattr(fn, "custom", False):
+            try:
+                r = fn(ctx, prev, fee_fn, m["result"].lower())
+            except Exception:
+                r = None
+            if r:
+                db.q("INSERT OR REPLACE INTO backtest_multi VALUES(?,?,?,?)", (name, m["ticker"], r["pnl"], r["won"]))
+            continue
         try:
             r = fn(ctx, prev, fee_fn)
         except Exception:
