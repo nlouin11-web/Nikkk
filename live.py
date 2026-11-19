@@ -97,6 +97,16 @@ class Kalshi:
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"Kalshi {e.code}: {e.read().decode()[:300]}")
 
+    def best_prices(self, ticker):
+        """Live top of book. Kalshi returns bids only: YES ask = 1 - best NO bid, NO ask = 1 - best YES bid."""
+        ob = self.request("GET", f"/markets/{ticker}/orderbook?depth=5").get("orderbook_fp", {})
+        def best(levels):
+            ps = [float(l[0]) for l in levels or [] if l and float(l[1] or 0) > 0]
+            return max(ps) if ps else None
+        yb, nb = best(ob.get("yes_dollars")), best(ob.get("no_dollars"))
+        return {"yes_bid": yb, "no_bid": nb,
+                "yes_ask": round(1 - nb, 4) if nb else None, "no_ask": round(1 - yb, 4) if yb else None}
+
     def balance(self):
         return self.request("GET", "/portfolio/balance")
 
@@ -248,6 +258,15 @@ class LiveTrader:
             return None
         if st.get("min_left", 99) < LIVE_MIN_MINUTES:
             return None
+        if hasattr(self.client, "best_prices"):           # re-price from the live order book, not the stale listing
+            try:
+                book = self.client.best_prices(st["ticker"])
+            except Exception as e:
+                self.last_error = f"orderbook: {e}"
+                return None
+            price = book.get(f"{side}_ask")
+            if not price or not (LIVE_MIN_PRICE <= price <= LIVE_MAX_PRICE):
+                return None
         if LIVE_STRATEGY == "fair_value":
             p_yes = st.get("p_yes")
             if p_yes is None:

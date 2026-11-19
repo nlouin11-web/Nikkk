@@ -218,6 +218,22 @@ class T(unittest.TestCase):
         self.assertIn("NOT FILLED", page)
         L.LIVE_MODE = "auto"
 
+    def test_reprices_from_orderbook(self):
+        L.LIVE_MODE = "on"
+        now = time.time()
+        self.c.best_prices = lambda tk: {"yes_ask": 0.70, "no_ask": 0.31, "yes_bid": 0.69, "no_bid": 0.30}
+        # listing said YES 0.60 (edge vs model .75), but the real ask is .70 -> edge gone -> skip
+        self.assertIsNone(self.lt.maybe_trade(state("OB1", ask=0.60, p_yes=0.75), "yes", now, M.taker_fee))
+        self.c.best_prices = lambda tk: {"yes_ask": 0.58, "no_ask": 0.43, "yes_bid": 0.57, "no_bid": 0.42}
+        self.lt.maybe_trade(state("OB2", ask=0.60, p_yes=0.75), "yes", now, M.taker_fee)
+        self.assertEqual(self.c.orders[-1][2], 0.58)   # orders at the real ask
+        k = L.Kalshi("x", None, "k")
+        k.request = lambda m, ep, b=None: {"orderbook_fp": {"yes_dollars": [["0.4000", "5"], ["0.4200", "3"]],
+                                                            "no_dollars": [["0.5500", "2"]]}}
+        bp = k.best_prices("T")
+        self.assertEqual((bp["yes_bid"], bp["yes_ask"], bp["no_ask"]), (0.42, 0.45, 0.58))
+        L.LIVE_MODE = "auto"
+
     def test_dashboard_renders_live_card(self):
         e = M.Engine(self.db, self.lt)
         page = M.render_dashboard(e)
