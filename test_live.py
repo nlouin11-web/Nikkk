@@ -127,6 +127,15 @@ class T(unittest.TestCase):
         self.assertEqual(sent["body"]["price"], "0.5500")
         self.assertAlmostEqual(o["cost"], 0.54)  # filled at avg 0.54 YES
 
+    def test_test_trade(self):
+        self.c.key_id = "kid-123"
+        st = state("TT", ask=0.70)  # yes .70, no .30 -> buys NO
+        self.assertEqual(self.lt.test_trade(st, time.time(), M.taker_fee, "wrong"), "Wrong Key ID")
+        msg = self.lt.test_trade(st, time.time(), M.taker_fee, "kid-123")
+        self.assertIn("FILLED", msg)
+        self.assertEqual(self.c.orders[-1][1], "no")
+        self.assertIn("Already traded", self.lt.test_trade(st, time.time(), M.taker_fee, "kid-123"))
+
     def test_dashboard_renders_live_card(self):
         e = M.Engine(self.db, self.lt)
         page = M.render_dashboard(e)

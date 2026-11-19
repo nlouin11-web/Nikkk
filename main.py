@@ -380,7 +380,12 @@ def render_dashboard(engine):
                      f"Today {fmt_money(L['today_pnl'])} · at risk ${L['at_risk']:.2f} · "
                      f"all-time {fmt_money(L['total_pnl'])} over {L['trades']} trades"
                      + (f"<br><span class=err>{html.escape(L['error'])}</span>" if L['error'] else "")
-                     + f"<br><br>{btn}</div>")
+                     + f"<br><br>{btn}"
+                     + (f"<p><b>Test result:</b> {html.escape(engine.status.get('test_msg') or '')}</p>"
+                        if engine.status.get('test_msg') else "")
+                     + "<form method=post action=/test style='margin-top:10px'>"
+                       "<input name=key_id placeholder='Paste Kalshi Key ID' style='padding:8px;width:60%'> "
+                       "<button style='padding:8px 12px'>Test trade (1 contract)</button></form></div>")
     err = engine.status.get("error")
     age = f"{now - engine.status['last_ok']:.0f}s ago" if engine.status.get("last_ok") else "never"
     return f"""<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1">
@@ -443,7 +448,11 @@ def make_handler(engine):
         def do_POST(self):
             n = int(self.headers.get("Content-Length") or 0)
             form = urllib.parse.parse_qs(self.rfile.read(n).decode()) if n else {}
-            if engine.live and self.path.startswith("/kill"):
+            if engine.live and self.path.startswith("/test"):
+                msg = engine.live.test_trade(engine.status.get("window"), time.time(), taker_fee,
+                                             (form.get("key_id") or [""])[0])
+                engine.status["test_msg"] = msg
+            elif engine.live and self.path.startswith("/kill"):
                 engine.live.set_killed(True)
             elif engine.live and self.path.startswith("/resume"):
                 tok = (form.get("token") or [""])[0]

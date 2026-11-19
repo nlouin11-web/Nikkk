@@ -223,6 +223,39 @@ class LiveTrader:
         self.last_error = None
         return o
 
+    def test_trade(self, st, now, fee_fn, key_id):
+        """One manual test order: 1 contract on the cheaper side. Needs the Kalshi Key ID.
+        Respects the kill switch and the daily loss cap; skips filters."""
+        if not (self.client.ready and key_id and key_id.strip() == self.client.key_id):
+            return "Wrong Key ID"
+        if self.killed:
+            return "Kill switch is ON"
+        if not st:
+            return "No open window right now"
+        asks = {k: v for k, v in st["ask"].items() if v and 0.02 <= v <= 0.60}
+        if not asks:
+            return "No cheap side to test with right now, try again in a minute"
+        side = min(asks, key=asks.get)
+        price = asks[side]
+        if self.at_risk(now) + price + fee_fn(1, price) > DAILY_LOSS_CAP + 1e-9:
+            return "Daily loss cap reached"
+        if self.db.q("SELECT 1 FROM live_trades WHERE ticker=?", (st["ticker"],)):
+            return "Already traded this window, try after the next one opens"
+        try:
+            o = self.client.buy_ioc(st["ticker"], side, price, 1)
+        except Exception as e:
+            self.last_error = str(e)
+            return f"Kalshi error: {e}"
+        filled = int(float(o.get("fill_count") or 0))
+        self.db.q("INSERT OR IGNORE INTO live_trades(ts,ticker,close_ts,side,limit_price,filled,cost,fee,order_id,status)"
+                  " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                  (now, st["ticker"], st["close_ts"], side, price, filled, float(o.get("cost") or 0),
+                   float(o.get("fees") or 0), o.get("order_id"), "test"))
+        self.last_error = None
+        if not filled:
+            return f"Order sent but not filled (price moved). Try again next window."
+        return f"FILLED: bought 1 {side.upper()} at {price:.2f} on {st['ticker']}"
+
     def settle(self, now, fetch):
         rows = self.db.q("SELECT id, ticker, side, filled, cost, fee FROM live_trades"
                          " WHERE result IS NULL AND close_ts < ?", (now - 3,))
