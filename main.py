@@ -298,6 +298,11 @@ class Engine:
                 self.trade(name, st, *d, now=now)
                 if self.live and name == live_mod.LIVE_STRATEGY:
                     self.live.maybe_trade(st, d[0], now, taker_fee)
+        if (self.live and live_mod.EVERY_WINDOW and 3.0 <= st["min_left"] <= 4.0
+                and not self.db.q("SELECT 1 FROM live_trades WHERE ticker=?", (st["ticker"],))):
+            side = self.live.best_side(st, taker_fee)
+            if side:
+                self.live.maybe_trade(st, side, now, taker_fee, force=True)
         self.status.update(window=st, last_ok=now, error=None)
         return st
 

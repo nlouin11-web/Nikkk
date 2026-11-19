@@ -31,6 +31,7 @@ LIVE_MIN_PRICE = float(os.environ.get("LIVE_MIN_PRICE", "0.15"))  # no lottery t
 LIVE_MAX_PRICE = float(os.environ.get("LIVE_MAX_PRICE", "0.85"))  # no 95c bets where one loss wipes 20 wins
 BALANCE_FLOOR = float(os.environ.get("BALANCE_FLOOR", "6"))  # auto kill switch if Kalshi cash drops below this
 LIVE_SLIPPAGE = float(os.environ.get("LIVE_SLIPPAGE", "0.02"))  # max extra cents paid to get filled
+EVERY_WINDOW = os.environ.get("LIVE_EVERY_WINDOW", "1") == "1"   # if nothing cleared the edge bar, buy the best side anyway
 TAKE_PROFIT = float(os.environ.get("TAKE_PROFIT", "0.03"))  # sell once locked-in profit >= 3c/contract after all fees
 LIVE_MIN_MINUTES = float(os.environ.get("LIVE_MIN_MINUTES", "2"))  # skip the chaotic last 2 minutes
 KEY_ID = os.environ.get("KALSHI_KEY_ID", "").strip()
@@ -249,7 +250,21 @@ class LiveTrader:
         return max(0.0, -self.today_pnl(now)) + open_cost
 
     # ---- actions
-    def maybe_trade(self, st, side, now, fee_fn):
+    def best_side(self, st, fee_fn):
+        """Side with the highest model edge (may be negative) within the price band."""
+        p = st.get("p_yes")
+        if p is None:
+            return None
+        best = None
+        for side, prob in (("yes", p), ("no", 1 - p)):
+            ask = st["ask"].get(side)
+            if ask and LIVE_MIN_PRICE <= ask <= LIVE_MAX_PRICE:
+                e = prob - ask - fee_fn(1, ask)
+                if best is None or e > best[1]:
+                    best = (side, e)
+        return best[0] if best else None
+
+    def maybe_trade(self, st, side, now, fee_fn, force=False):
         ok, why = self.status()
         if not ok:
             return None
@@ -267,7 +282,9 @@ class LiveTrader:
             price = book.get(f"{side}_ask")
             if not price or not (LIVE_MIN_PRICE <= price <= LIVE_MAX_PRICE):
                 return None
-        if LIVE_STRATEGY == "fair_value":
+        if force:
+            prob = 1.0
+        elif LIVE_STRATEGY == "fair_value":
             p_yes = st.get("p_yes")
             if p_yes is None:
                 return None
@@ -281,7 +298,7 @@ class LiveTrader:
         # allow up to 2c of slippage so the order actually fills, but only while the edge still clears the bar
         limit = price
         for bump in [b / 100 for b in range(int(round(LIVE_SLIPPAGE * 100)), 0, -1)]:
-            if (LIVE_STRATEGY == "fair_value" and prob - (price + bump) - fee_fn(1, price + bump) >= LIVE_MIN_EDGE
+            if (not force and LIVE_STRATEGY == "fair_value" and prob - (price + bump) - fee_fn(1, price + bump) >= LIVE_MIN_EDGE
                     and price + bump <= LIVE_MAX_PRICE):
                 limit = round(price + bump, 2)
                 break

@@ -234,6 +234,15 @@ class T(unittest.TestCase):
         self.assertEqual((bp["yes_bid"], bp["yes_ask"], bp["no_ask"]), (0.42, 0.45, 0.58))
         L.LIVE_MODE = "auto"
 
+    def test_every_window_best_side(self):
+        L.LIVE_MODE = "on"
+        st = state("EW", ask=0.55, p_yes=0.50)          # YES edge -.07, NO (.45 ask) edge +.03 -> NO
+        self.assertEqual(self.lt.best_side(st, M.taker_fee), "no")
+        self.assertIsNone(self.lt.maybe_trade(st, "no", time.time(), M.taker_fee))          # below 5c bar
+        self.assertIsNotNone(self.lt.maybe_trade(st, "no", time.time(), M.taker_fee, force=True))
+        self.assertEqual(self.c.orders[-1][1:3], ("no", 0.45))
+        L.LIVE_MODE = "auto"
+
     def test_dashboard_renders_live_card(self):
         e = M.Engine(self.db, self.lt)
         page = M.render_dashboard(e)
