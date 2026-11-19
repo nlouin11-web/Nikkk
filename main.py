@@ -20,9 +20,12 @@ import threading
 import time
 import traceback
 import urllib.request
+import urllib.parse
 from collections import deque
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import live as live_mod
 
 # ---------------------------------------------------------------- config
 KALSHI = os.environ.get("KALSHI_BASE", "https://api.elections.kalshi.com/trade-api/v2")
@@ -204,8 +207,9 @@ class DB:
 
 # ---------------------------------------------------------------- engine
 class Engine:
-    def __init__(self, db):
+    def __init__(self, db, live=None):
         self.db = db
+        self.live = live
         self.vol = Vol()
         self.status = {"started": time.time(), "last_ok": None, "error": None}
 
@@ -248,6 +252,8 @@ class Engine:
         spot = spot_fn()
         self.vol.add(now, spot)
         self.settle(now, fetch)
+        if self.live:
+            self.live.settle(now, fetch)
         m = market_fn(now)
         if not m:
             self.status.update(window=None)
@@ -263,6 +269,8 @@ class Engine:
                 d = None
             if d:
                 self.trade(name, st, *d, now=now)
+                if self.live and name == live_mod.LIVE_STRATEGY:
+                    self.live.maybe_trade(st, d[0], now, taker_fee)
         self.status.update(window=st, last_ok=now, error=None)
         return st
 
@@ -336,6 +344,23 @@ def render_dashboard(engine):
                 + (f" · model YES {st['p_yes']:.2f}" if st['p_yes'] is not None else " · model warming up"))
     else:
         live = "No open window right now."
+    live_html = ""
+    if engine.live:
+        L = engine.live.summary(now)
+        badge = ("<b style='color:#16a34a'>LIVE: trading real money</b>" if L["enabled"]
+                 else "<b style='color:#eab308'>LIVE: off</b>")
+        btn = ("<form method=post action=/kill><button style='background:#dc2626;color:#fff;border:0;"
+               "padding:10px 16px;border-radius:8px;font-size:16px'>KILL SWITCH: stop live trading</button></form>"
+               if not L["killed"] else
+               ("<form method=post action=/resume><input name=token placeholder='admin token' "
+                "style='padding:8px'> <button>Resume</button></form>" if L["can_resume"] else
+                "<small>Killed. Set LIVE_MODE=off then back to auto in Railway to reset.</small>"))
+        live_html = (f"<div class=card>{badge} <small>({html.escape(L['reason'])})</small><br>"
+                     f"Strategy <b>{L['strategy']}</b> · {L['contracts']} contract/trade · cap ${L['cap']:.2f}/day<br>"
+                     f"Today {fmt_money(L['today_pnl'])} · at risk ${L['at_risk']:.2f} · "
+                     f"all-time {fmt_money(L['total_pnl'])} over {L['trades']} trades"
+                     + (f"<br><span class=err>{html.escape(L['error'])}</span>" if L['error'] else "")
+                     + f"<br><br>{btn}</div>")
     err = engine.status.get("error")
     age = f"{now - engine.status['last_ok']:.0f}s ago" if engine.status.get("last_ok") else "never"
     return f"""<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1">
@@ -347,6 +372,7 @@ small{{color:#8b949e}} .err{{color:#f87171}}</style></head><body>
 <h1>BTC 15-min Paper Bot</h1><small>PAPER MONEY ONLY · {CONTRACTS} contracts/trade · fees included · updated {age}</small>
 {f'<div class="card err">Error: {html.escape(err)}</div>' if err else ''}
 <div class=card>{live}</div>
+{live_html}
 <div class=card><table><tr><th>Strategy</th><th>Trades</th><th>Win%</th><th>P/L</th></tr>{rows}</table>
 <small>¢ = avg profit per contract after fees, ± = rough 95% range. A strategy only has an edge if it beats
 random_baseline and the whole range stays above 0 after {MIN_SETTLED_FOR_VERDICT}+ trades.</small></div>
@@ -394,13 +420,27 @@ def make_handler(engine):
                 self.end_headers()
                 self.wfile.write(str(e).encode())
 
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            form = urllib.parse.parse_qs(self.rfile.read(n).decode()) if n else {}
+            if engine.live and self.path.startswith("/kill"):
+                engine.live.set_killed(True)
+            elif engine.live and self.path.startswith("/resume"):
+                tok = (form.get("token") or [""])[0]
+                if live_mod.ADMIN_TOKEN and tok == live_mod.ADMIN_TOKEN:
+                    engine.live.set_killed(False)
+            self.send_response(303)
+            self.send_header("Location", "/")
+            self.end_headers()
+
         def log_message(self, *a):
             pass
     return H
 
 
 def main():
-    engine = Engine(DB(DB_PATH))
+    db = DB(DB_PATH)
+    engine = Engine(db, live_mod.LiveTrader(db, KALSHI, strategy_stats))
     threading.Thread(target=engine.run, daemon=True).start()
     print(f"Paper bot running. DB={DB_PATH}. Dashboard on port {PORT}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", PORT), make_handler(engine)).serve_forever()
