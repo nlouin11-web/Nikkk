@@ -88,6 +88,17 @@ def btc_spot():
         return float(next(iter(d.values()))["c"][0])
 
 
+def btc_history():
+    """Last ~2h of 1-minute BTC closes, oldest first, so the model is ready instantly after a restart."""
+    try:
+        rows = http_json("https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60")
+        return sorted((r[0], float(r[4])) for r in rows)
+    except Exception:
+        d = http_json("https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=1")["result"]
+        rows = next(v for k, v in d.items() if k != "last")
+        return [(int(r[0]), float(r[4])) for r in rows][-180:]
+
+
 def current_market(now):
     data = http_json(f"{KALSHI}/markets?series_ticker={SERIES}&status=open&limit=20")
     live = []
@@ -274,7 +285,16 @@ class Engine:
         self.status.update(window=st, last_ok=now, error=None)
         return st
 
+    def warm_up(self, history_fn=btc_history):
+        try:
+            for ts, price in history_fn():
+                self.vol.add(ts, price)
+            print(f"Warm-up loaded {len(self.vol.samples)} minutes of BTC prices", flush=True)
+        except Exception as e:
+            print("warm-up failed (will warm up live):", e, flush=True)
+
     def run(self):
+        self.warm_up()
         while True:
             try:
                 self.step()
@@ -369,7 +389,7 @@ body{{font-family:-apple-system,system-ui,sans-serif;margin:12px;background:#0b0
 h1{{font-size:20px;margin:0 0 4px}} .card{{background:#151b23;border-radius:10px;padding:10px;margin:10px 0}}
 table{{width:100%;border-collapse:collapse;font-size:14px}} td,th{{padding:6px 4px;border-bottom:1px solid #222;text-align:left;vertical-align:top}}
 small{{color:#8b949e}} .err{{color:#f87171}}</style></head><body>
-<h1>BTC 15-min Paper Bot</h1><small>PAPER MONEY ONLY · {CONTRACTS} contracts/trade · fees included · updated {age}</small>
+<h1>BTC 15-min Bot</h1><small>Strategy table = paper results ({CONTRACTS} contracts/trade, fees included) · updated {age}</small>
 {f'<div class="card err">Error: {html.escape(err)}</div>' if err else ''}
 <div class=card>{live}</div>
 {live_html}

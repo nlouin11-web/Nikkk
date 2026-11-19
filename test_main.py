@@ -62,5 +62,19 @@ class T(unittest.TestCase):
         self.assertIn("strategy,ticker", M.csv_dump(db, "trades"))
 
 
+class W(unittest.TestCase):
+    def test_warm_up_makes_model_ready(self):
+        e = M.Engine(M.DB(tempfile.mktemp(suffix=".db")))
+        import random
+        random.seed(2)
+        p, hist = 60000.0, []
+        for i in range(120):
+            p *= 1 + random.gauss(0, 0.0007)
+            hist.append((1_800_000_000 - (120 - i) * 60, p))
+        e.warm_up(lambda: hist)
+        self.assertIsNotNone(e.vol.sigma())
+        self.assertIsNotNone(e.vol.change(15))
+
+
 if __name__ == "__main__":
     unittest.main()
