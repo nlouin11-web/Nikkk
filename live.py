@@ -29,6 +29,7 @@ DAILY_LOSS_CAP = float(os.environ.get("DAILY_LOSS_CAP", "5"))
 LIVE_MIN_EDGE = float(os.environ.get("LIVE_MIN_EDGE", "0.05"))   # model must beat price+fee by 5c
 LIVE_MIN_PRICE = float(os.environ.get("LIVE_MIN_PRICE", "0.15"))  # no lottery tickets
 LIVE_MAX_PRICE = float(os.environ.get("LIVE_MAX_PRICE", "0.85"))  # no 95c bets where one loss wipes 20 wins
+BALANCE_FLOOR = float(os.environ.get("BALANCE_FLOOR", "6"))  # auto kill switch if Kalshi cash drops below this
 TAKE_PROFIT = float(os.environ.get("TAKE_PROFIT", "0.03"))  # sell once locked-in profit >= 3c/contract after all fees
 LIVE_MIN_MINUTES = float(os.environ.get("LIVE_MIN_MINUTES", "2"))  # skip the chaotic last 2 minutes
 KEY_ID = os.environ.get("KALSHI_KEY_ID", "").strip()
@@ -289,6 +290,23 @@ class LiveTrader:
             return f"Order sent but not filled (price moved). Try again next window."
         return f"FILLED: bought 1 {side.upper()} at {price:.2f} on {st['ticker']}"
 
+    def check_balance(self, now):
+        """Every minute: read Kalshi cash. Below BALANCE_FLOOR -> flip the kill switch automatically."""
+        if not self.client.ready or now - getattr(self, "_bal_ts", 0) < 60:
+            return
+        self._bal_ts = now
+        try:
+            r = self.client.request("GET", "/portfolio/balance")
+        except Exception as e:
+            self.last_error = f"balance: {e}"
+            return
+        bal = r.get("balance_dollars")
+        bal = float(bal) if bal not in (None, "") else (r.get("balance") or 0) / 100
+        self.last_balance = bal
+        if bal < BALANCE_FLOOR and not self.killed:
+            self.set_killed(True)
+            self.last_error = f"AUTO-STOP: balance ${bal:.2f} fell below ${BALANCE_FLOOR:.2f} floor"
+
     def resync(self, get_market, series="KXBTC15M"):
         """Rebuild live state from Kalshi after a restart: open positions (so take-profit and settlement keep
         working) and today's settled results (so the daily loss cap can't reset by restarting)."""
@@ -368,7 +386,7 @@ class LiveTrader:
     def summary(self, now):
         ok, why = self.status()
         tot = self.db.q("SELECT COUNT(*), COALESCE(SUM(pnl),0) FROM live_trades WHERE filled>0")[0]
-        return {"enabled": ok, "reason": why, "mode": LIVE_MODE, "strategy": LIVE_STRATEGY,
+        return {"balance": self.last_balance, "floor": BALANCE_FLOOR, "enabled": ok, "reason": why, "mode": LIVE_MODE, "strategy": LIVE_STRATEGY,
                 "contracts": LIVE_CONTRACTS, "cap": DAILY_LOSS_CAP, "killed": self.killed,
                 "today_pnl": self.today_pnl(now), "at_risk": self.at_risk(now),
                 "trades": tot[0], "total_pnl": tot[1], "error": self.last_error,

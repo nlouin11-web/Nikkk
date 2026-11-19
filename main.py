@@ -274,6 +274,7 @@ class Engine:
                   (now, st["ticker"], st["yes_bid"], st["ask"]["yes"], st["no_bid"], st["ask"]["no"],
                    spot, st["strike"], st["p_yes"]))
         if self.live:
+            self.live.check_balance(now)
             try:
                 self.live.take_profit(st, now, taker_fee)
             except Exception as e:
@@ -386,7 +387,8 @@ def render_dashboard(engine):
                 "style='padding:8px'> <button>Resume</button></form>" if L["can_resume"] else
                 "<small>Killed. Set LIVE_MODE=off then back to auto in Railway to reset.</small>"))
         live_html = (f"<div class=card>{badge} <small>({html.escape(L['reason'])})</small><br>"
-                     f"Strategy <b>{L['strategy']}</b> · {L['contracts']} contract/trade · cap ${L['cap']:.2f}/day<br>"
+                     + (f"Kalshi cash <b>${L['balance']:.2f}</b> · auto-stop below ${L['floor']:.2f}<br>" if L['balance'] is not None else "")
+                     + f"Strategy <b>{L['strategy']}</b> · {L['contracts']} contract/trade · cap ${L['cap']:.2f}/day<br>"
                      f"Today {fmt_money(L['today_pnl'])} · at risk ${L['at_risk']:.2f} · "
                      f"all-time {fmt_money(L['total_pnl'])} over {L['trades']} trades"
                      + (f"<br><span class=err>{html.escape(L['error'])}</span>" if L['error'] else "")

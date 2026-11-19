@@ -183,6 +183,19 @@ class T(unittest.TestCase):
         self.assertAlmostEqual(self.lt.at_risk(now), 0.62 + 0.35)
         self.assertEqual(self.lt.resync(lambda tk: {}), 0)              # idempotent
 
+    def test_balance_floor_autostop(self):
+        L.LIVE_MODE = "on"
+        self.c.request = lambda m, ep, body=None: {"balance": 1226}
+        self.lt.check_balance(1000.0)
+        self.assertFalse(self.lt.killed); self.assertAlmostEqual(self.lt.last_balance, 12.26)
+        self.c.request = lambda m, ep, body=None: {"balance": 590}
+        self.lt.check_balance(1030.0)               # throttled to once a minute
+        self.assertFalse(self.lt.killed)
+        self.lt.check_balance(1061.0)
+        self.assertTrue(self.lt.killed)
+        self.assertFalse(self.lt.status()[0])
+        L.LIVE_MODE = "auto"
+
     def test_dashboard_renders_live_card(self):
         e = M.Engine(self.db, self.lt)
         page = M.render_dashboard(e)
