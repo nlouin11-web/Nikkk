@@ -149,6 +149,34 @@ def simulate_trend12(m, candles, fee_fn):
             "result": m["result"].lower(), "pnl": (1 if won else 0) - ask - fee}
 
 
+TAKE_PROFIT = float(os.environ.get("TAKE_PROFIT", "0.03"))
+
+
+def simulate_trend12_tp(m, candles, fee_fn, tp=None):
+    """Nick's rule + quick cash-out: enter leader at 12 min left; sell the first minute the bid locks in
+    >= TAKE_PROFIT after both fees; otherwise hold to settlement."""
+    tp = TAKE_PROFIT if tp is None else tp
+    entry = simulate_trend12(m, candles, fee_fn)
+    if not entry:
+        return None
+    close = _ts(m["close_time"])
+    cost = entry["price"] + entry["fee"]
+    for cd in sorted(candles, key=lambda x: x["end_period_ts"]):
+        mins = (close - int(cd["end_period_ts"])) / 60
+        if mins >= 11.5 or mins <= 0:
+            continue
+        if entry["side"] == "yes":
+            bid = _f(cd.get("yes_bid", {}).get("close_dollars"))
+        else:
+            ya = _f(cd.get("yes_ask", {}).get("close_dollars"))
+            bid = (1 - ya) if ya else None
+        if bid:
+            profit = bid - fee_fn(1, bid) - cost
+            if profit >= tp:
+                return dict(entry, pnl=profit, minutes_left=mins, result="sold")
+    return entry
+
+
 def _f(v):
     try:
         f = float(v)
@@ -159,7 +187,7 @@ def _f(v):
 
 def run(db, http_json, base, fair_prob, fee_fn, series="KXBTC15M", status=None):
     status = status if status is not None else {}
-    for tbl in ("backtest", "backtest_trend12"):
+    for tbl in ("backtest", "backtest_trend12", "backtest_trend12_tp"):
         db.q(f"""CREATE TABLE IF NOT EXISTS {tbl}(ticker TEXT PRIMARY KEY, side TEXT, price REAL, fee REAL,
                 minutes_left REAL, result TEXT, pnl REAL)""")
     now = time.time()
@@ -175,7 +203,8 @@ def run(db, http_json, base, fair_prob, fee_fn, series="KXBTC15M", status=None):
         except Exception:
             cds = []
         for tbl, fn in (("backtest", lambda: simulate_window(m, cds, btc, fair_prob, fee_fn)),
-                        ("backtest_trend12", lambda: simulate_trend12(m, cds, fee_fn))):
+                        ("backtest_trend12", lambda: simulate_trend12(m, cds, fee_fn)),
+                        ("backtest_trend12_tp", lambda: simulate_trend12_tp(m, cds, fee_fn))):
             try:
                 tr = fn()
             except Exception:
@@ -192,7 +221,7 @@ def run(db, http_json, base, fair_prob, fee_fn, series="KXBTC15M", status=None):
 def stats(db, table="backtest"):
     try:
         rows = [r[0] for r in db.q(f"SELECT pnl FROM {table}")]
-        wins = db.q(f"SELECT COUNT(*) FROM {table} WHERE side=result")[0][0]
+        wins = db.q(f"SELECT COUNT(*) FROM {table} WHERE pnl > 0")[0][0]
     except Exception:
         return {"n": 0}
     n = len(rows)

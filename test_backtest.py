@@ -60,6 +60,20 @@ class T(unittest.TestCase):
         m["result"] = "no"
         self.assertLess(B.simulate_trend12(m, candles, M.taker_fee)["pnl"], -0.68)
 
+    def test_trend12_take_profit(self):
+        c = 1_800_000_000
+        m = {"ticker": "KXBTC15M-T", "close_time": iso(c), "result": "no"}
+        cd = lambda mins, ya, yb: {"end_period_ts": c - mins * 60, "yes_ask": {"close_dollars": ya},
+                                   "yes_bid": {"close_dollars": yb}}
+        candles = [cd(12, "0.6200", "0.6000"), cd(10, "0.6600", "0.6400"), cd(8, "0.7400", "0.7200")]
+        tr = B.simulate_trend12_tp(m, candles, M.taker_fee)
+        self.assertEqual(tr["result"], "sold")        # bid .72 - fee - (.62+fee) >= .03 -> sold, even though NO won
+        self.assertGreater(tr["pnl"], 0.03)
+        flat = [cd(12, "0.6200", "0.6000"), cd(5, "0.6300", "0.6100")]
+        tr2 = B.simulate_trend12_tp(m, flat, M.taker_fee)
+        self.assertEqual(tr2["result"], "no")         # never hit target -> held, lost
+        self.assertLess(tr2["pnl"], -0.6)
+
     def test_auto_gate_uses_backtest(self):
         db = M.DB(tempfile.mktemp(suffix=".db"))
         class C: ready = True

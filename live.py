@@ -190,6 +190,8 @@ class LiveTrader:
     def strategy_proven(self):
         import backtest
         bt = backtest.stats(self.db)
+        if LIVE_STRATEGY == "trend_12m":
+            bt = backtest.stats(self.db, "backtest_trend12_tp")
         if bt.get("edge"):
             return True, f"backtest edge: {bt['cents']:+.2f}c/contract over {bt['n']} trades"
         if bt.get("n", 0) >= 300:
@@ -237,18 +239,24 @@ class LiveTrader:
         price = st["ask"][side]
         if not price or not (LIVE_MIN_PRICE <= price <= LIVE_MAX_PRICE):
             return None
-        p_yes = st.get("p_yes")
-        if p_yes is None or st.get("min_left", 99) < LIVE_MIN_MINUTES:
+        if st.get("min_left", 99) < LIVE_MIN_MINUTES:
             return None
-        prob = p_yes if side == "yes" else 1 - p_yes
-        if prob - price - fee_fn(1, price) < LIVE_MIN_EDGE:
-            return None
+        if LIVE_STRATEGY == "fair_value":
+            p_yes = st.get("p_yes")
+            if p_yes is None:
+                return None
+            prob = p_yes if side == "yes" else 1 - p_yes
+            if prob - price - fee_fn(1, price) < LIVE_MIN_EDGE:
+                return None
+        else:
+            prob = 1.0   # rule-based strategy: no model edge check, no slippage beyond the band
         if self.db.q("SELECT 1 FROM live_trades WHERE ticker=?", (st["ticker"],)):
             return None
         # allow up to 2c of slippage so the order actually fills, but only while the edge still clears the bar
         limit = price
         for bump in [b / 100 for b in range(int(round(LIVE_SLIPPAGE * 100)), 0, -1)]:
-            if prob - (price + bump) - fee_fn(1, price + bump) >= LIVE_MIN_EDGE and price + bump <= LIVE_MAX_PRICE:
+            if (LIVE_STRATEGY == "fair_value" and prob - (price + bump) - fee_fn(1, price + bump) >= LIVE_MIN_EDGE
+                    and price + bump <= LIVE_MAX_PRICE):
                 limit = round(price + bump, 2)
                 break
         worst = limit * LIVE_CONTRACTS + fee_fn(LIVE_CONTRACTS, limit)

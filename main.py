@@ -454,6 +454,14 @@ def render_dashboard(engine):
         bt_html += (f"<div class=card><b>Backtest: your trend_12m rule</b> <small>(follow leader at 12 min left)</small><br>"
                     f"{t12['n']} trades · win {t12['win_rate']*100:.1f}% · {t12['cents']:+.2f}¢{se2}/contract after fees<br>"
                     f"<b>{'EDGE FOUND' if t12['edge'] else ('No proven edge' if t12['n'] >= 300 else 'Collecting')}</b></div>")
+    tp = bt_mod.stats(db, "backtest_trend12_tp")
+    if tp.get("n"):
+        se3 = f" ±{2*tp['se_cents']:.1f}" if tp.get("se_cents") else ""
+        sold = db.q("SELECT COUNT(*) FROM backtest_trend12_tp WHERE result='sold'")[0][0]
+        bt_html += (f"<div class=card><b>Backtest: trend_12m + quick cash-out</b> <small>(sell at first +3¢ profit)</small><br>"
+                    f"{tp['n']} trades · profitable {tp['win_rate']*100:.1f}% · cashed out early {sold} · "
+                    f"{tp['cents']:+.2f}¢{se3}/contract after fees<br>"
+                    f"<b>{'EDGE FOUND' if tp['edge'] else ('No proven edge' if tp['n'] >= 300 else 'Collecting')}</b></div>")
     err = engine.status.get("error")
     age = f"{now - engine.status['last_ok']:.0f}s ago" if engine.status.get("last_ok") else "never"
     return f"""<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1">
