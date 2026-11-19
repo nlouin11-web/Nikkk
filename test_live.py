@@ -240,7 +240,8 @@ class T(unittest.TestCase):
         self.assertEqual(self.lt.best_side(st, M.taker_fee), "no")
         self.assertIsNone(self.lt.maybe_trade(st, "no", time.time(), M.taker_fee))          # below 5c bar
         self.assertIsNotNone(self.lt.maybe_trade(st, "no", time.time(), M.taker_fee, force=True))
-        self.assertEqual(self.c.orders[-1][1:3], ("no", 0.45))
+        self.assertEqual(self.c.orders[-1][1], "no")
+        self.assertAlmostEqual(self.c.orders[-1][2], 0.45)
         L.LIVE_MODE = "auto"
 
     def test_dashboard_renders_live_card(self):
