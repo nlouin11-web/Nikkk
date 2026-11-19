@@ -12,7 +12,7 @@ import os
 import time
 from datetime import datetime, timezone
 
-DAYS = float(os.environ.get("BACKTEST_DAYS", "7"))
+DAYS = float(os.environ.get("BACKTEST_DAYS", "30"))
 MIN_EDGE = float(os.environ.get("LIVE_MIN_EDGE", "0.05"))
 MIN_PRICE = float(os.environ.get("LIVE_MIN_PRICE", "0.15"))
 MAX_PRICE = float(os.environ.get("LIVE_MAX_PRICE", "0.85"))
@@ -51,14 +51,32 @@ def fetch_markets(http_json, base, series, start):
         cursor = d.get("cursor") or ""
         if not cursor:
             break
+    seen = {m["ticker"] for m in out}
+    try:   # older settled markets may only be listed under /historical
+        cursor = ""
+        for _ in range(50):
+            d = http_json(f"{base}/historical/markets?series_ticker={series}&min_close_ts={int(start)}&limit=1000"
+                          + (f"&cursor={cursor}" if cursor else ""))
+            out += [m for m in d.get("markets", []) if m.get("ticker") not in seen]
+            cursor = d.get("cursor") or ""
+            if not cursor:
+                break
+    except Exception:
+        pass
     return [m for m in out if (m.get("result") or "").lower() in ("yes", "no")]
 
 
 def fetch_candles(http_json, base, series, m):
     o, c = int(_ts(m["open_time"])), int(_ts(m["close_time"]))
-    d = http_json(f"{base}/series/{series}/markets/{m['ticker']}/candlesticks"
-                  f"?start_ts={o}&end_ts={c}&period_interval=1")
-    return d.get("candlesticks", [])
+    q = f"?start_ts={o}&end_ts={c}&period_interval=1"
+    try:
+        d = http_json(f"{base}/series/{series}/markets/{m['ticker']}/candlesticks{q}")
+        if d.get("candlesticks"):
+            return d["candlesticks"]
+    except Exception:
+        pass
+    # markets older than Kalshi's historical cutoff live under /historical
+    return http_json(f"{base}/historical/markets/{m['ticker']}/candlesticks{q}").get("candlesticks", [])
 
 
 def sigma_at(btc, t, lookback=60):
